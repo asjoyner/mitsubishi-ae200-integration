@@ -14,13 +14,18 @@ from homeassistant.const import (
 )
 from homeassistant.helpers.entity import generate_entity_id
 import homeassistant.helpers.config_validation as cv
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .mitsubishi_ae200 import MitsubishiAE200Functions
+from .const import DOMAIN, CONF_CONTROLLER_ID
 
 _LOGGER = logging.getLogger(__name__)
 
+# Keep the old PLATFORM_SCHEMA for backward compatibility with YAML configuration
 PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required("controller_id"): cv.string,
+    vol.Required(CONF_CONTROLLER_ID): cv.string,
     vol.Required(CONF_IP_ADDRESS): cv.string,
 })
 
@@ -349,10 +354,42 @@ class AE200Climate(ClimateEntity):
             self._target_temperature_low = None
             self._hvac_mode = HVACMode.OFF
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    _LOGGER.info("Setting up Mitsubishi AE200 platform...")
 
-    controllerid = config.get('controller_id')
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Mitsubishi AE200 climate entities from a config entry."""
+    _LOGGER.info("Setting up Mitsubishi AE200 climate platform from config entry...")
+
+    controllerid = entry.data[CONF_CONTROLLER_ID]
+    ipaddress = entry.data[CONF_IP_ADDRESS]
+
+    mitsubishi_ae200_functions = MitsubishiAE200Functions()
+    devices = []
+    
+    try:
+        # Get device list from controller
+        group_list = await mitsubishi_ae200_functions.getDevicesAsync(ipaddress)
+        for group in group_list:
+            device = AE200Device(ipaddress, group["id"], group["name"], mitsubishi_ae200_functions)
+            devices.append(AE200Climate(hass, device, controllerid))
+
+        if devices:
+            async_add_entities(devices, update_before_add=True)
+            _LOGGER.info(f"Added {len(devices)} Mitsubishi AE200 device(s).")
+        else:
+            _LOGGER.warning("No Mitsubishi AE200 devices found.")
+    except Exception as err:
+        _LOGGER.error(f"Error setting up Mitsubishi AE200 devices: {err}")
+
+
+async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
+    """Set up the Mitsubishi AE200 climate platform from YAML configuration (legacy)."""
+    _LOGGER.info("Setting up Mitsubishi AE200 platform from YAML configuration...")
+
+    controllerid = config.get(CONF_CONTROLLER_ID)
     ipaddress = config.get(CONF_IP_ADDRESS)
     if not controllerid or not ipaddress:
         _LOGGER.error("Missing controller_id or ip_address in configuration")
