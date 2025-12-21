@@ -2,10 +2,11 @@
 import logging
 
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import Platform
+from homeassistant.const import CONF_IP_ADDRESS, Platform
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import device_registry as dr
 
-from .const import DOMAIN
+from .const import DOMAIN, CONF_CONTROLLER_ID
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -16,6 +17,17 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     """Set up Mitsubishi AE200 from a config entry."""
     hass.data.setdefault(DOMAIN, {})
     hass.data[DOMAIN][entry.entry_id] = entry.data
+
+    # Register the controller as a device
+    device_registry = dr.async_get(hass)
+    device_registry.async_get_or_create(
+        config_entry_id=entry.entry_id,
+        identifiers={(DOMAIN, entry.entry_id)},
+        name=f"Mitsubishi AE200 Controller ({entry.data[CONF_CONTROLLER_ID]})",
+        manufacturer="Mitsubishi Electric",
+        model="AE200 Controller",
+        configuration_url=f"http://{entry.data[CONF_IP_ADDRESS]}",
+    )
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
 

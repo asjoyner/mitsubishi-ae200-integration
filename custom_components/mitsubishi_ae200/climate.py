@@ -11,7 +11,7 @@ from homeassistant.const import (
     UnitOfTemperature,
     ATTR_TEMPERATURE,
 )
-from homeassistant.helpers.entity import generate_entity_id
+from homeassistant.helpers.entity import generate_entity_id, DeviceInfo
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -59,7 +59,7 @@ class AE200Device:
         except Exception:
             return None
 
-    async def getID(self):
+    def getID(self):
         return self._deviceid
 
     def getName(self):
@@ -130,8 +130,9 @@ class AE200Device:
         await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"Drive": "OFF"})
 
 class AE200Climate(ClimateEntity):
-    def __init__(self, hass, device: AE200Device, controllerid: str):
+    def __init__(self, hass, device: AE200Device, controllerid: str, entry_id: str):
         self._device = device
+        self._entry_id = entry_id
         self.entity_id = generate_entity_id(
             "climate.{}", f"mitsubishi_ae_200_{controllerid}_{device.getName()}", None, hass
         )
@@ -195,6 +196,22 @@ class AE200Climate(ClimateEntity):
     @property
     def name(self):
         return self._device.getName()
+
+    @property
+    def unique_id(self) -> str:
+        """Return a unique ID for this climate entity."""
+        return f"{self._entry_id}_{self._device.getID()}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information about this Mitsubishi AE200 HVAC unit."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._entry_id}_{self._device.getID()}")},
+            name=self._device.getName(),
+            manufacturer="Mitsubishi Electric",
+            model="HVAC Unit",
+            via_device=(DOMAIN, self._entry_id),
+        )
 
     @property
     def temperature_unit(self):
@@ -366,7 +383,7 @@ async def async_setup_entry(
         group_list = await mitsubishi_ae200_functions.getDevicesAsync(ipaddress)
         for group in group_list:
             device = AE200Device(ipaddress, group["id"], group["name"], mitsubishi_ae200_functions)
-            devices.append(AE200Climate(hass, device, controllerid))
+            devices.append(AE200Climate(hass, device, controllerid, entry.entry_id))
 
         if devices:
             async_add_entities(devices, update_before_add=True)
