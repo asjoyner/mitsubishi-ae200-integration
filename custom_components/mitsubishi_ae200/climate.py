@@ -94,6 +94,9 @@ class AE200Device:
     async def getMode(self):
         return await self._get_info("Mode", Mode.Auto)
 
+    async def getFilterSign(self):
+        return await self._get_info("FilterSign", "OFF")
+
     async def isPowerOn(self):
         return await self._get_info("Drive", "OFF") == "ON"
 
@@ -381,6 +384,7 @@ async def async_setup_entry(
     try:
         # Get device list from controller
         group_list = await mitsubishi_ae200_functions.getDevicesAsync(ipaddress)
+        _LOGGER.info(group_list)
         for group in group_list:
             device = AE200Device(ipaddress, group["id"], group["name"], mitsubishi_ae200_functions)
             devices.append(AE200Climate(hass, device, controllerid, entry.entry_id))

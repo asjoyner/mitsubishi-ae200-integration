@@ -52,6 +52,7 @@ class MitsubishiAE200Functions:
 
             groupList = []
             for r in unitsResultXML.findall('./DatabaseManager/ControlGroup/MnetList/MnetRecord'):
+                # Note to future self: Group and GroupNameWeb are the only attributes exposed, there's no more details that can be fetched here
                 groupList.append({
                     "id": r.get('Group'),
                     "name": r.get('GroupNameWeb')
