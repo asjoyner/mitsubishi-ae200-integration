@@ -1,8 +1,7 @@
 import logging
-import voluptuous as vol
 import asyncio
 
-from homeassistant.components.climate import ClimateEntity, PLATFORM_SCHEMA
+from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
     HVACMode,
     ClimateEntityFeature,
@@ -12,17 +11,15 @@ from homeassistant.const import (
     UnitOfTemperature,
     ATTR_TEMPERATURE,
 )
-from homeassistant.helpers.entity import generate_entity_id
-import homeassistant.helpers.config_validation as cv
+from homeassistant.helpers.entity import generate_entity_id, DeviceInfo
+from homeassistant.config_entries import ConfigEntry
+from homeassistant.core import HomeAssistant
+from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .mitsubishi_ae200 import MitsubishiAE200Functions
+from .const import DOMAIN, CONF_CONTROLLER_ID
 
 _LOGGER = logging.getLogger(__name__)
-
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend({
-    vol.Required("controller_id"): cv.string,
-    vol.Required(CONF_IP_ADDRESS): cv.string,
-})
 
 MIN_TEMP = 16
 MAX_TEMP = 30
@@ -62,7 +59,7 @@ class AE200Device:
         except Exception:
             return None
 
-    async def getID(self):
+    def getID(self):
         return self._deviceid
 
     def getName(self):
@@ -96,6 +93,9 @@ class AE200Device:
 
     async def getMode(self):
         return await self._get_info("Mode", Mode.Auto)
+
+    async def getFilterSign(self):
+        return await self._get_info("FilterSign", "OFF")
 
     async def isPowerOn(self):
         return await self._get_info("Drive", "OFF") == "ON"
@@ -133,8 +133,9 @@ class AE200Device:
         await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"Drive": "OFF"})
 
 class AE200Climate(ClimateEntity):
-    def __init__(self, hass, device: AE200Device, controllerid: str):
+    def __init__(self, hass, device: AE200Device, controllerid: str, entry_id: str):
         self._device = device
+        self._entry_id = entry_id
         self.entity_id = generate_entity_id(
             "climate.{}", f"mitsubishi_ae_200_{controllerid}_{device.getName()}", None, hass
         )
@@ -198,6 +199,22 @@ class AE200Climate(ClimateEntity):
     @property
     def name(self):
         return self._device.getName()
+
+    @property
+    def unique_id(self) -> str:
+        """Return a unique ID for this climate entity."""
+        return f"{self._entry_id}_{self._device.getID()}"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        """Return device information about this Mitsubishi AE200 HVAC unit."""
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._entry_id}_{self._device.getID()}")},
+            name=self._device.getName(),
+            manufacturer="Mitsubishi Electric",
+            model="HVAC Unit",
+            via_device=(DOMAIN, self._entry_id),
+        )
 
     @property
     def temperature_unit(self):
@@ -349,25 +366,33 @@ class AE200Climate(ClimateEntity):
             self._target_temperature_low = None
             self._hvac_mode = HVACMode.OFF
 
-async def async_setup_platform(hass, config, async_add_entities, discovery_info=None):
-    _LOGGER.info("Setting up Mitsubishi AE200 platform...")
 
-    controllerid = config.get('controller_id')
-    ipaddress = config.get(CONF_IP_ADDRESS)
-    if not controllerid or not ipaddress:
-        _LOGGER.error("Missing controller_id or ip_address in configuration")
-        return
+async def async_setup_entry(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    async_add_entities: AddEntitiesCallback,
+) -> None:
+    """Set up Mitsubishi AE200 climate entities from a config entry."""
+    _LOGGER.info("Setting up Mitsubishi AE200 climate platform from config entry...")
+
+    controllerid = entry.data[CONF_CONTROLLER_ID]
+    ipaddress = entry.data[CONF_IP_ADDRESS]
 
     mitsubishi_ae200_functions = MitsubishiAE200Functions()
     devices = []
-    # Get device list from controller
-    group_list = await mitsubishi_ae200_functions.getDevicesAsync(ipaddress)
-    for group in group_list:
-        device = AE200Device(ipaddress, group["id"], group["name"], mitsubishi_ae200_functions)
-        devices.append(AE200Climate(hass, device, controllerid))
+    
+    try:
+        # Get device list from controller
+        group_list = await mitsubishi_ae200_functions.getDevicesAsync(ipaddress)
+        _LOGGER.info(group_list)
+        for group in group_list:
+            device = AE200Device(ipaddress, group["id"], group["name"], mitsubishi_ae200_functions)
+            devices.append(AE200Climate(hass, device, controllerid, entry.entry_id))
 
-    if devices:
-        async_add_entities(devices, update_before_add=True)
-        _LOGGER.info(f"Added {len(devices)} Mitsubishi AE200 device(s).")
-    else:
-        _LOGGER.warning("No Mitsubishi AE200 devices found.")
+        if devices:
+            async_add_entities(devices, update_before_add=True)
+            _LOGGER.info(f"Added {len(devices)} Mitsubishi AE200 device(s).")
+        else:
+            _LOGGER.warning("No Mitsubishi AE200 devices found.")
+    except Exception as err:
+        _LOGGER.error(f"Error setting up Mitsubishi AE200 devices: {err}")

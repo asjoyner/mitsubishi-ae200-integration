@@ -4,6 +4,8 @@
   "documentation": "https://github.com/sftgunner/mitsubishi-ae200-integration",
   "dependencies": [],
   "codeowners": ["@sftgunner"],
-  "version": "1.1.1",
-  "requirements": ["websockets"]
+  "version": "1.2.0",
+  "requirements": ["websockets"],
+  "config_flow": true,
+  "iot_class": "local_polling"
 }

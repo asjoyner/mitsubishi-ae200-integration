@@ -1,0 +1,22 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect to Mitsubishi AE200 Controller",
+        "description": "Enter the IP address of your Mitsubishi AE200 controller and a unique identifier for this controller.",
+        "data": {
+          "controller_id": "Controller ID",
+          "ip_address": "IP Address"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Failed to connect to the controller. Please check the IP address.",
+      "no_devices": "No devices found on the controller.",
+      "unknown": "Unexpected error occurred."
+    },
+    "abort": {
+      "already_configured": "This controller is already configured."
+    }
+  }
+}
