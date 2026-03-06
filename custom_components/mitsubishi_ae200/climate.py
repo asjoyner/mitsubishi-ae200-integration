@@ -26,8 +26,11 @@ MAX_TEMP = 30
 
 class Mode:
     Heat = "HEAT"
+    Heating = "HEATING"
     Dry = "DRY"
+    Drying = "DRYING"
     Cool = "COOL"
+    Cooling = "COOLING"
     Fan = "FAN"
     Auto = "AUTO"
     AutoCool = "AUTOCOOL"
@@ -61,7 +64,9 @@ class AE200Device:
 
     async def _to_float(self, value):
         try:
-            return float(value) if value is not None else None
+            if value is None or value == "":
+                return None
+            return float(value)
         except Exception:
             return None
 
@@ -72,13 +77,15 @@ class AE200Device:
         return self._name
 
     async def getTargetTemperature(self):
+        # SetTemp is the primary active setpoint reported by the device
+        temp = await self._to_float(await self._get_info("SetTemp", None))
+        if temp is not None:
+            return temp
+
+        # Fallback to mode-specific setpoints if SetTemp is missing
         mode = await self.getMode()
-        if mode in (Mode.Heat, Mode.AutoHeat):
+        if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
             return await self._to_float(await self._get_info("SetTemp2", None))
-        elif mode in (Mode.Cool, Mode.AutoCool):
-            return await self._to_float(await self._get_info("SetTemp1", None))
-        elif mode == Mode.Dry:
-            return await self._to_float(await self._get_info("SetTemp1", None))
         else:
             return await self._to_float(await self._get_info("SetTemp1", None))
         
@@ -108,15 +115,14 @@ class AE200Device:
 
     async def setTemperature(self, temperature):
         temperature = _round_temp(temperature)
+        # SetTemp is the most compatible attribute for single-setpoint updates
+        params = {"SetTemp": str(temperature)}
         mode = await self.getMode()
-        if mode in (Mode.Heat, Mode.AutoHeat):
-            await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp2": str(temperature)})
-        elif mode in (Mode.Cool, Mode.AutoCool):
-            await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp1": str(temperature)})
-        elif mode == Mode.Dry:
-            await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp1": str(temperature)})
-        else:
-            await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp1": str(temperature)})
+        if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
+            params["SetTemp2"] = str(temperature)
+        elif mode in (Mode.Cool, Mode.Cooling, Mode.Dry, Mode.Drying, Mode.AutoCool):
+            params["SetTemp1"] = str(temperature)
+        await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, params)
             
     async def setTemperatureHigh(self, temperature):
         temperature = _round_temp(temperature)
@@ -360,11 +366,11 @@ class AE200Climate(ClimateEntity):
             self._target_temperature_high = await self._device.getTargetTemperatureHigh()
             self._target_temperature_low = await self._device.getTargetTemperatureLow()
             mode = await self._device.getMode()
-            if mode == Mode.Heat:
+            if mode in (Mode.Heat, Mode.Heating):
                 self._hvac_mode = HVACMode.HEAT
-            elif mode == Mode.Cool:
+            elif mode in (Mode.Cool, Mode.Cooling):
                 self._hvac_mode = HVACMode.COOL
-            elif mode == Mode.Dry:
+            elif mode in (Mode.Dry, Mode.Drying):
                 self._hvac_mode = HVACMode.DRY
             elif mode == Mode.Fan:
                 self._hvac_mode = HVACMode.FAN_ONLY
