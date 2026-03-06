@@ -111,10 +111,12 @@ class AE200Device:
     async def getFilterSign(self):
         return await self._get_info("FilterSign", "OFF")
 
+    async def getModel(self):
+        return await self._get_info("Model", "")
+
     async def isWaterHeater(self):
         """Water heaters report Model='WH', air conditioners report 'IC'."""
-        model = await self._get_info("Model", "")
-        return model == "WH"
+        return await self.getModel() == "WH"
 
     async def isPowerOn(self):
         return await self._get_info("Drive", "OFF") == "ON"
@@ -209,6 +211,7 @@ class AE200Climate(ClimateEntity):
         self._hvac_mode = HVACMode.OFF
         self._last_hvac_mode = HVACMode.COOL  # Keep track of last HVAC mode to handle turning on/off
         self._is_water_heater = False
+        self._model_code = None
 
     @property
     def supported_features(self):
@@ -230,11 +233,13 @@ class AE200Climate(ClimateEntity):
     @property
     def device_info(self) -> DeviceInfo:
         """Return device information about this Mitsubishi AE200 HVAC unit."""
+        MODEL_NAMES = {"IC": "Air Conditioner", "WH": "Air to Water"}
+        model = MODEL_NAMES.get(self._model_code, f"Unknown ({self._model_code})")
         return DeviceInfo(
             identifiers={(DOMAIN, f"{self._entry_id}_{self._device.getID()}")},
             name=self._device.getName(),
             manufacturer="Mitsubishi Electric",
-            model="HVAC Unit",
+            model=model,
             via_device=(DOMAIN, self._entry_id),
         )
 
@@ -369,7 +374,16 @@ class AE200Climate(ClimateEntity):
     async def async_update(self):
         _LOGGER.info(f"Updating climate entity: {self.entity_id}")
         await self._device._refresh_device_info_async()
-        self._is_water_heater = await self._device.isWaterHeater()
+        model = await self._device.getModel()
+        if model != self._model_code:
+            self._model_code = model
+            self._is_water_heater = await self._device.isWaterHeater()
+            if model not in ("IC", "WH"):
+                _LOGGER.warning(
+                    f"Unrecognized unit model '{model}' for {self.entity_id}; "
+                    f"using HVAC defaults. See "
+                    f"https://github.com/sftgunner/mitsubishi-ae200-integration/blob/main/ADDING_DEVICE_TYPES.md"
+                )
         self._current_temperature = await self._device.getRoomTemperature()
         self._fan_mode = await self._device.getFanSpeed()
         self._swing_mode = await self._device.getSwingMode()
