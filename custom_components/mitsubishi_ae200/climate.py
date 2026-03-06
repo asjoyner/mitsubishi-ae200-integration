@@ -170,13 +170,24 @@ class AE200Climate(ClimateEntity):
             HVACMode.FAN_ONLY,
             HVACMode.HEAT_COOL,
         ]
-        self._fan_mode_map = {
-            "AUTO": "Auto",
-            "LOW": "Min (1/4)",
-            "MID2": "Low (2/4)",
-            "MID1": "High (3/4)",
-            "HIGH": "Max (4/4)",
-        }
+        fan_speed_sw = device._attributes.get("FanSpeedSW", "NONE")
+        if fan_speed_sw == "4STAGES":
+            self._fan_mode_map = {
+                "AUTO": "Auto",
+                "LOW": "Min",
+                "MID2": "Low",
+                "MID1": "High",
+                "HIGH": "Max",
+            }
+        elif fan_speed_sw == "3STAGES":
+            self._fan_mode_map = {
+                "AUTO": "Auto",
+                "MID2": "Low",
+                "MID1": "High",
+                "HIGH": "Max",
+            }
+        else:
+            self._fan_mode_map = {}
         self._reverse_fan_mode_map = {v: k for k, v in self._fan_mode_map.items()}
         self._attr_fan_modes = list(self._fan_mode_map.values())
         
