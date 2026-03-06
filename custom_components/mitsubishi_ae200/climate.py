@@ -434,7 +434,10 @@ async def async_setup_entry(
         _LOGGER.info(group_list)
         for group in group_list:
             device = AE200Device(ipaddress, group["id"], group["name"], mitsubishi_ae200_functions)
-            await device._refresh_device_info_async()
+            try:
+                await device._refresh_device_info_async()
+            except Exception:
+                _LOGGER.warning(f"Could not fetch initial device info for {group['name']}")
             devices.append(AE200Climate(hass, device, controllerid, entry.entry_id))
 
         if devices:
