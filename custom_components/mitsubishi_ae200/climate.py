@@ -203,8 +203,10 @@ class AE200Climate(ClimateEntity):
             ClimateEntityFeature.TURN_ON |
             ClimateEntityFeature.TURN_OFF
         )
-        if not self._is_water_heater:
-            features |= ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.SWING_MODE
+        if device._attributes.get("FanSpeedSW", "NONE") != "NONE":
+            features |= ClimateEntityFeature.FAN_MODE
+        if device._attributes.get("SwingSW") == "ENABLE":
+            features |= ClimateEntityFeature.SWING_MODE
         self._attr_supported_features = features
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._current_temperature = None
