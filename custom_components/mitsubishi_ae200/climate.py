@@ -23,6 +23,7 @@ _LOGGER = logging.getLogger(__name__)
 
 MIN_TEMP = 16
 MAX_TEMP = 30
+MAX_TEMP_WATER_HEATER = 80
 
 class Mode:
     Heat = "HEAT"
@@ -109,6 +110,11 @@ class AE200Device:
 
     async def getFilterSign(self):
         return await self._get_info("FilterSign", "OFF")
+
+    async def isWaterHeater(self):
+        """Water heaters report Model='WH', air conditioners report 'IC'."""
+        model = await self._get_info("Model", "")
+        return model == "WH"
 
     async def isPowerOn(self):
         return await self._get_info("Drive", "OFF") == "ON"
@@ -202,6 +208,7 @@ class AE200Climate(ClimateEntity):
         self._fan_mode = None
         self._hvac_mode = HVACMode.OFF
         self._last_hvac_mode = HVACMode.COOL  # Keep track of last HVAC mode to handle turning on/off
+        self._is_water_heater = False
 
     @property
     def supported_features(self):
@@ -266,7 +273,9 @@ class AE200Climate(ClimateEntity):
 
     @property
     def max_temp(self):
-        return MAX_TEMP # Think this can be variable if the eco-protect mode is enabled, but for now we use a constant
+        if self._is_water_heater:
+            return MAX_TEMP_WATER_HEATER
+        return MAX_TEMP
 
     @property
     def target_temperature_step(self):
@@ -360,6 +369,7 @@ class AE200Climate(ClimateEntity):
     async def async_update(self):
         _LOGGER.info(f"Updating climate entity: {self.entity_id}")
         await self._device._refresh_device_info_async()
+        self._is_water_heater = await self._device.isWaterHeater()
         self._current_temperature = await self._device.getRoomTemperature()
         self._fan_mode = await self._device.getFanSpeed()
         self._swing_mode = await self._device.getSwingMode()
