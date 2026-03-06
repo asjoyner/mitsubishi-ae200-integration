@@ -193,14 +193,19 @@ class AE200Climate(ClimateEntity):
         self._attr_swing_modes = list(self._swing_mode_map.values())
         
         
-        self._attr_supported_features = (
-            ClimateEntityFeature.TARGET_TEMPERATURE | 
-            ClimateEntityFeature.FAN_MODE | 
-            ClimateEntityFeature.SWING_MODE | 
+        # Model is available immediately since device info is fetched during setup
+        self._model_code = device._attributes.get("Model", "")
+        self._is_water_heater = self._model_code == "WH"
+
+        features = (
+            ClimateEntityFeature.TARGET_TEMPERATURE |
             ClimateEntityFeature.TARGET_TEMPERATURE_RANGE |
             ClimateEntityFeature.TURN_ON |
             ClimateEntityFeature.TURN_OFF
         )
+        if not self._is_water_heater:
+            features |= ClimateEntityFeature.FAN_MODE | ClimateEntityFeature.SWING_MODE
+        self._attr_supported_features = features
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._current_temperature = None
         self._target_temperature = None
@@ -210,9 +215,6 @@ class AE200Climate(ClimateEntity):
         self._fan_mode = None
         self._hvac_mode = HVACMode.OFF
         self._last_hvac_mode = HVACMode.COOL  # Keep track of last HVAC mode to handle turning on/off
-        # Model is available immediately since device info is fetched during setup
-        self._model_code = device._attributes.get("Model", "")
-        self._is_water_heater = self._model_code == "WH"
 
     @property
     def supported_features(self):
