@@ -274,14 +274,16 @@ class AE200Climate(ClimateEntity):
 
     @property
     def fan_mode(self):
-        # Convert internal value to user-friendly label
+        if not self._fan_mode:
+            return None
         if self._fan_mode in self._fan_mode_map:
             return self._fan_mode_map[self._fan_mode]
         return self._fan_mode
-    
+
     @property
     def swing_mode(self):
-        # Convert internal value to user-friendly label
+        if not self._swing_mode:
+            return None
         if self._swing_mode in self._swing_mode_map:
             return self._swing_mode_map[self._swing_mode]
         return self._swing_mode
