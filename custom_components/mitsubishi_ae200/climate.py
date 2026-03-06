@@ -325,16 +325,16 @@ class AE200Climate(ClimateEntity):
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is not None:
             await self._device.setTemperature(temperature)
-            self._target_temperature = temperature
+            self._target_temperature = _round_temp(temperature)
             self.async_write_ha_state()
-            
+
         temp_low = kwargs.get("target_temp_low")
         temp_high = kwargs.get("target_temp_high")
         if temp_low is not None and temp_high is not None:
             await self._device.setTemperatureHigh(temp_high)
             await self._device.setTemperatureLow(temp_low)
-            self._target_temperature_low = temp_low
-            self._target_temperature_high = temp_high
+            self._target_temperature_low = _round_temp(temp_low)
+            self._target_temperature_high = _round_temp(temp_high)
             self.async_write_ha_state()
 
     async def async_set_hvac_mode(self, hvac_mode):
