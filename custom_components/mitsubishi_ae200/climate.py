@@ -210,8 +210,9 @@ class AE200Climate(ClimateEntity):
         self._fan_mode = None
         self._hvac_mode = HVACMode.OFF
         self._last_hvac_mode = HVACMode.COOL  # Keep track of last HVAC mode to handle turning on/off
-        self._is_water_heater = False
-        self._model_code = None
+        # Model is available immediately since device info is fetched during setup
+        self._model_code = device._attributes.get("Model", "")
+        self._is_water_heater = self._model_code == "WH"
 
     @property
     def supported_features(self):
@@ -433,6 +434,7 @@ async def async_setup_entry(
         _LOGGER.info(group_list)
         for group in group_list:
             device = AE200Device(ipaddress, group["id"], group["name"], mitsubishi_ae200_functions)
+            await device._refresh_device_info_async()
             devices.append(AE200Climate(hass, device, controllerid, entry.entry_id))
 
         if devices:
