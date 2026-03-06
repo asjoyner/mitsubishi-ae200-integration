@@ -5,6 +5,8 @@ from websockets.extensions import permessage_deflate
 import xml.etree.ElementTree as ET
 from pprint import pprint
 
+_LOGGER = logging.getLogger(__name__)
+
 
 # logging.basicConfig(
 #     format="%(asctime)s %(message)s",
@@ -102,5 +104,13 @@ class MitsubishiAE200Functions:
 </Packet>
 """
             await websocket.send(payload)
+            try:
+                response = await asyncio.wait_for(websocket.recv(), timeout=5)
+                if 'ErrorResponse' in response or 'errorResponse' in response:
+                    _LOGGER.error(f"AE200 setRequest failed: {response}")
+                else:
+                    _LOGGER.debug(f"AE200 setRequest OK: {response}")
+            except asyncio.TimeoutError:
+                _LOGGER.warning("AE200 setRequest: no response within 5s")
 
             await websocket.close()

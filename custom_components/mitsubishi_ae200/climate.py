@@ -30,6 +30,12 @@ class Mode:
     Cool = "COOL"
     Fan = "FAN"
     Auto = "AUTO"
+    AutoCool = "AUTOCOOL"
+    AutoHeat = "AUTOHEAT"
+
+def _round_temp(temperature):
+    """Round temperature to nearest 0.5°C, as required by the AE200 controller."""
+    return round(temperature * 2) / 2
 
 class AE200Device:
     def __init__(self, ipaddress: str, deviceid: str, name: str, mitsubishi_ae200_functions: MitsubishiAE200Functions):
@@ -67,9 +73,9 @@ class AE200Device:
 
     async def getTargetTemperature(self):
         mode = await self.getMode()
-        if mode == Mode.Heat:
+        if mode in (Mode.Heat, Mode.AutoHeat):
             return await self._to_float(await self._get_info("SetTemp2", None))
-        elif mode == Mode.Cool:
+        elif mode in (Mode.Cool, Mode.AutoCool):
             return await self._to_float(await self._get_info("SetTemp1", None))
         elif mode == Mode.Dry:
             return await self._to_float(await self._get_info("SetTemp1", None))
@@ -101,20 +107,23 @@ class AE200Device:
         return await self._get_info("Drive", "OFF") == "ON"
 
     async def setTemperature(self, temperature):
+        temperature = _round_temp(temperature)
         mode = await self.getMode()
-        if mode == Mode.Heat:
+        if mode in (Mode.Heat, Mode.AutoHeat):
             await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp2": str(temperature)})
-        elif mode == Mode.Cool:
+        elif mode in (Mode.Cool, Mode.AutoCool):
             await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp1": str(temperature)})
         elif mode == Mode.Dry:
             await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp1": str(temperature)})
         else:
             await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp1": str(temperature)})
             
-    async def setTemperatureHigh(self,temperature):
+    async def setTemperatureHigh(self, temperature):
+        temperature = _round_temp(temperature)
         await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp1": str(temperature)})
-        
+
     async def setTemperatureLow(self, temperature):
+        temperature = _round_temp(temperature)
         await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp2": str(temperature)})
 
     async def setFanSpeed(self, speed):
@@ -254,6 +263,10 @@ class AE200Climate(ClimateEntity):
         return MAX_TEMP # Think this can be variable if the eco-protect mode is enabled, but for now we use a constant
 
     @property
+    def target_temperature_step(self):
+        return 0.5
+
+    @property
     def fan_mode(self):
         # Convert internal value to user-friendly label
         if self._fan_mode in self._fan_mode_map:
@@ -356,9 +369,10 @@ class AE200Climate(ClimateEntity):
             elif mode == Mode.Fan:
                 self._hvac_mode = HVACMode.FAN_ONLY
                 self._target_temperature = None # Special case where there is no target temperature for fan mode
-            elif mode == Mode.Auto:
+            elif mode in (Mode.Auto, Mode.AutoCool, Mode.AutoHeat):
                 self._hvac_mode = HVACMode.HEAT_COOL
             else:
+                _LOGGER.warning(f"Unknown HVAC mode '{mode}' for {self.entity_id}, defaulting to HEAT_COOL")
                 self._hvac_mode = HVACMode.HEAT_COOL
         else:
             self._target_temperature = None
