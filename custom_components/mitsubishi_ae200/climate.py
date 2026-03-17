@@ -1,5 +1,9 @@
 import logging
 import asyncio
+from datetime import datetime, timezone
+import xml.etree.ElementTree as ET
+
+import websockets.exceptions
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
@@ -50,13 +54,36 @@ class AE200Device:
         self._attributes = {}
         self._last_info_time_s = 0
         self._info_lease_seconds = 10
+        self._available: bool = True
+        self._last_error_reason: str | None = None
+        self._last_successful_poll: str | None = None
 
     async def _refresh_device_info_async(self):
         _LOGGER.info(f"Refreshing device info: {self._ipaddress} - {self._deviceid} ({self._name})")
-        self._attributes = await self._mitsubishi_ae200_functions.getDeviceInfoAsync(self._ipaddress, self._deviceid)
-        self._last_info_time_s = asyncio.get_event_loop().time()
-        if self._deviceid == "6":
-            _LOGGER.info(self._attributes) # Only log HVAC for Library
+        try:
+            self._attributes = await self._mitsubishi_ae200_functions.getDeviceInfoAsync(self._ipaddress, self._deviceid)
+            self._last_info_time_s = asyncio.get_event_loop().time()
+            self._available = True
+            self._last_error_reason = None
+            self._last_successful_poll = datetime.now(timezone.utc).isoformat()
+            if self._deviceid == "6":
+                _LOGGER.info(self._attributes)  # Only log HVAC for Library
+        except (ConnectionRefusedError, OSError) as err:
+            self._available = False
+            self._last_error_reason = "connection_refused"
+            _LOGGER.warning(f"Connection refused for {self._name} ({self._deviceid}): {err}")
+        except (asyncio.TimeoutError, websockets.exceptions.WebSocketException) as err:
+            self._available = False
+            self._last_error_reason = "connection_timeout"
+            _LOGGER.warning(f"Connection timeout for {self._name} ({self._deviceid}): {err}")
+        except (ET.ParseError, AttributeError) as err:
+            self._available = False
+            self._last_error_reason = "invalid_response"
+            _LOGGER.warning(f"Invalid response for {self._name} ({self._deviceid}): {err}")
+        except Exception as err:
+            self._available = False
+            self._last_error_reason = str(err)
+            _LOGGER.warning(f"Unexpected error for {self._name} ({self._deviceid}): {err}")
 
     async def _get_info(self, key, default_value):
         if not self._attributes or (asyncio.get_event_loop().time() - self._last_info_time_s) > self._info_lease_seconds:
@@ -110,6 +137,9 @@ class AE200Device:
 
     async def getFilterSign(self):
         return await self._get_info("FilterSign", "OFF")
+
+    async def getErrorSign(self):
+        return await self._get_info("ErrorSign", "OFF")
 
     async def getModel(self):
         return await self._get_info("Model", "")
@@ -228,6 +258,19 @@ class AE200Climate(ClimateEntity):
         self._fan_mode = None
         self._hvac_mode = HVACMode.OFF
         self._last_hvac_mode = HVACMode.COOL  # Keep track of last HVAC mode to handle turning on/off
+
+    @property
+    def available(self) -> bool:
+        return self._device._available
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        attrs = {}
+        if self._device._last_error_reason is not None:
+            attrs["last_error_reason"] = self._device._last_error_reason
+        if self._device._last_successful_poll is not None:
+            attrs["last_successful_poll"] = self._device._last_successful_poll
+        return attrs
 
     @property
     def supported_features(self):

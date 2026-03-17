@@ -1,7 +1,10 @@
 """Binary sensors for Mitsubishi AE200 integration."""
 import logging
 
-from homeassistant.components.binary_sensor import BinarySensorEntity
+from homeassistant.components.binary_sensor import (
+    BinarySensorDeviceClass,
+    BinarySensorEntity,
+)
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_IP_ADDRESS
 from homeassistant.core import HomeAssistant
@@ -52,6 +55,19 @@ class AE200FilterSignSensor(BinarySensorEntity):
         )
 
     @property
+    def available(self) -> bool:
+        return self._device._available
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        attrs = {}
+        if self._device._last_error_reason is not None:
+            attrs["last_error_reason"] = self._device._last_error_reason
+        if self._device._last_successful_poll is not None:
+            attrs["last_successful_poll"] = self._device._last_successful_poll
+        return attrs
+
+    @property
     def is_on(self) -> bool:
         """Return True if filter sign is ON."""
         return self._attr_is_on
@@ -61,6 +77,63 @@ class AE200FilterSignSensor(BinarySensorEntity):
         await self._device._refresh_device_info_async()
         filter_sign = await self._device.getFilterSign()
         self._attr_is_on = filter_sign == "ON"
+
+
+class AE200ErrorSignSensor(BinarySensorEntity):
+    """Binary sensor for AE200 error sign status."""
+
+    _attr_device_class = BinarySensorDeviceClass.PROBLEM
+
+    def __init__(self, hass, device, controllerid: str, entry_id: str):
+        self._device = device
+        self._entry_id = entry_id
+        self.entity_id = generate_entity_id(
+            "binary_sensor.{}",
+            f"mitsubishi_ae_200_{controllerid}_{device.getName()}_error",
+            None,
+            hass,
+        )
+        self._attr_is_on = False
+
+    @property
+    def unique_id(self) -> str:
+        return f"{self._entry_id}_{self._device.getID()}_error"
+
+    @property
+    def name(self) -> str:
+        return f"{self._device.getName()} Error Sign"
+
+    @property
+    def device_info(self) -> DeviceInfo:
+        return DeviceInfo(
+            identifiers={(DOMAIN, f"{self._entry_id}_{self._device.getID()}")},
+            name=self._device.getName(),
+            manufacturer="Mitsubishi Electric",
+            model="HVAC Unit",
+            via_device=(DOMAIN, self._entry_id),
+        )
+
+    @property
+    def available(self) -> bool:
+        return self._device._available
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        attrs = {}
+        if self._device._last_error_reason is not None:
+            attrs["last_error_reason"] = self._device._last_error_reason
+        if self._device._last_successful_poll is not None:
+            attrs["last_successful_poll"] = self._device._last_successful_poll
+        return attrs
+
+    @property
+    def is_on(self) -> bool:
+        return self._attr_is_on
+
+    async def async_update(self):
+        await self._device._refresh_device_info_async()
+        error_sign = await self._device.getErrorSign()
+        self._attr_is_on = error_sign == "ON"
 
 
 async def async_setup_entry(
@@ -88,6 +161,9 @@ async def async_setup_entry(
             )
             sensors.append(
                 AE200FilterSignSensor(hass, device, controllerid, entry.entry_id)
+            )
+            sensors.append(
+                AE200ErrorSignSensor(hass, device, controllerid, entry.entry_id)
             )
 
         if sensors:
