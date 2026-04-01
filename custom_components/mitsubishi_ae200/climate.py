@@ -1,9 +1,4 @@
 import logging
-import asyncio
-from datetime import datetime, timezone
-import xml.etree.ElementTree as ET
-
-import websockets.exceptions
 
 from homeassistant.components.climate import ClimateEntity
 from homeassistant.components.climate.const import (
@@ -20,7 +15,9 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .mitsubishi_ae200 import MitsubishiAE200Functions
+from .ae200lib.controller import AE200Controller
+from .ae200lib.device import DeviceState
+
 from .const import DOMAIN, CONF_CONTROLLER_ID
 
 _LOGGER = logging.getLogger(__name__)
@@ -45,152 +42,15 @@ def _round_temp(temperature):
     """Round temperature to nearest 0.5°C, as required by the AE200 controller."""
     return round(temperature * 2) / 2
 
-class AE200Device:
-    def __init__(self, ipaddress: str, deviceid: str, name: str, mitsubishi_ae200_functions: MitsubishiAE200Functions):
-        self._ipaddress = ipaddress
-        self._deviceid = deviceid
-        self._name = name
-        self._mitsubishi_ae200_functions = mitsubishi_ae200_functions
-        self._attributes = {}
-        self._last_info_time_s = 0
-        self._info_lease_seconds = 10
-        self._available: bool = True
-        self._last_error_reason: str | None = None
-        self._last_successful_poll: str | None = None
-
-    async def _refresh_device_info_async(self):
-        _LOGGER.info(f"Refreshing device info: {self._ipaddress} - {self._deviceid} ({self._name})")
-        try:
-            self._attributes = await self._mitsubishi_ae200_functions.getDeviceInfoAsync(self._ipaddress, self._deviceid)
-            self._last_info_time_s = asyncio.get_event_loop().time()
-            self._available = True
-            self._last_error_reason = None
-            self._last_successful_poll = datetime.now(timezone.utc).isoformat()
-            if self._deviceid == "6":
-                _LOGGER.info(self._attributes)  # Only log HVAC for Library
-        except (ConnectionRefusedError, OSError) as err:
-            self._available = False
-            self._last_error_reason = "connection_refused"
-            _LOGGER.warning(f"Connection refused for {self._name} ({self._deviceid}): {err}")
-        except (asyncio.TimeoutError, websockets.exceptions.WebSocketException) as err:
-            self._available = False
-            self._last_error_reason = "connection_timeout"
-            _LOGGER.warning(f"Connection timeout for {self._name} ({self._deviceid}): {err}")
-        except (ET.ParseError, AttributeError) as err:
-            self._available = False
-            self._last_error_reason = "invalid_response"
-            _LOGGER.warning(f"Invalid response for {self._name} ({self._deviceid}): {err}")
-        except Exception as err:
-            self._available = False
-            self._last_error_reason = str(err)
-            _LOGGER.warning(f"Unexpected error for {self._name} ({self._deviceid}): {err}")
-
-    async def _get_info(self, key, default_value):
-        if not self._attributes or (asyncio.get_event_loop().time() - self._last_info_time_s) > self._info_lease_seconds:
-            await self._refresh_device_info_async()
-        return self._attributes.get(key, default_value)
-
-    async def _to_float(self, value):
-        try:
-            if value is None or value == "":
-                return None
-            return float(value)
-        except Exception:
-            return None
-
-    def getID(self):
-        return self._deviceid
-
-    def getName(self):
-        return self._name
-
-    async def getTargetTemperature(self):
-        # SetTemp is the primary active setpoint reported by the device
-        temp = await self._to_float(await self._get_info("SetTemp", None))
-        if temp is not None:
-            return temp
-
-        # Fallback to mode-specific setpoints if SetTemp is missing
-        mode = await self.getMode()
-        if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
-            return await self._to_float(await self._get_info("SetTemp2", None))
-        else:
-            return await self._to_float(await self._get_info("SetTemp1", None))
-        
-    async def getTargetTemperatureHigh(self):
-        return await self._to_float(await self._get_info("SetTemp1", None))
-    
-    async def getTargetTemperatureLow(self):
-        return await self._to_float(await self._get_info("SetTemp2", None))
-
-    async def getRoomTemperature(self):
-        return await self._to_float(await self._get_info("InletTemp", None))
-
-    async def getFanSpeed(self):
-        return await self._get_info("FanSpeed", None)
-    
-    async def getSwingMode(self):
-        return await self._get_info("AirDirection", None)
-
-    async def getMode(self):
-        return await self._get_info("Mode", Mode.Auto)
-
-    async def getFilterSign(self):
-        return await self._get_info("FilterSign", "OFF")
-
-    async def getErrorSign(self):
-        return await self._get_info("ErrorSign", "OFF")
-
-    async def getModel(self):
-        return await self._get_info("Model", "")
-
-    async def isWaterHeater(self):
-        """Water heaters report Model='WH', air conditioners report 'IC'."""
-        return await self.getModel() == "WH"
-
-    async def isPowerOn(self):
-        return await self._get_info("Drive", "OFF") == "ON"
-
-    async def setTemperature(self, temperature):
-        temperature = _round_temp(temperature)
-        # SetTemp is the most compatible attribute for single-setpoint updates
-        params = {"SetTemp": str(temperature)}
-        mode = await self.getMode()
-        if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
-            params["SetTemp2"] = str(temperature)
-        elif mode in (Mode.Cool, Mode.Cooling, Mode.Dry, Mode.Drying, Mode.AutoCool):
-            params["SetTemp1"] = str(temperature)
-        await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, params)
-            
-    async def setTemperatureHigh(self, temperature):
-        temperature = _round_temp(temperature)
-        await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp1": str(temperature)})
-
-    async def setTemperatureLow(self, temperature):
-        temperature = _round_temp(temperature)
-        await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"SetTemp2": str(temperature)})
-
-    async def setFanSpeed(self, speed):
-        await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"FanSpeed": speed})
-        
-    async def setSwingMode(self, mode):
-        await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"AirDirection": mode})
-
-    async def setMode(self, mode):
-        await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"Mode": mode})
-
-    async def powerOn(self):
-        await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"Drive": "ON"})
-
-    async def powerOff(self):
-        await self._mitsubishi_ae200_functions.sendAsync(self._ipaddress, self._deviceid, {"Drive": "OFF"})
 
 class AE200Climate(ClimateEntity):
-    def __init__(self, hass, device: AE200Device, controllerid: str, entry_id: str):
+    def __init__(self, hass, controller: AE200Controller, device: DeviceState,
+                 controllerid: str, entry_id: str):
+        self._controller = controller
         self._device = device
         self._entry_id = entry_id
         self.entity_id = generate_entity_id(
-            "climate.{}", f"mitsubishi_ae_200_{controllerid}_{device.getName()}", None, hass
+            "climate.{}", f"mitsubishi_ae_200_{controllerid}_{device.name}", None, hass
         )
         self._attr_hvac_modes = [
             HVACMode.OFF,
@@ -200,7 +60,7 @@ class AE200Climate(ClimateEntity):
             HVACMode.FAN_ONLY,
             HVACMode.HEAT_COOL,
         ]
-        fan_speed_sw = device._attributes.get("FanSpeedSW", "NONE")
+        fan_speed_sw = device.fan_speed_sw
         if fan_speed_sw == "4STAGES":
             self._fan_mode_map = {
                 "AUTO": "Auto",
@@ -220,7 +80,7 @@ class AE200Climate(ClimateEntity):
             self._fan_mode_map = {}
         self._reverse_fan_mode_map = {v: k for k, v in self._fan_mode_map.items()}
         self._attr_fan_modes = list(self._fan_mode_map.values())
-        
+
         self._swing_mode_map = {
             "AUTO": "Auto",
             "SWING": "Swing",
@@ -232,11 +92,9 @@ class AE200Climate(ClimateEntity):
         }
         self._reverse_swing_mode_map = {v: k for k, v in self._swing_mode_map.items()}
         self._attr_swing_modes = list(self._swing_mode_map.values())
-        
-        
-        # Model is available immediately since device info is fetched during setup
-        self._model_code = device._attributes.get("Model", "")
-        self._is_water_heater = self._model_code == "WH"
+
+        self._model_code = device.model
+        self._is_water_heater = device.is_water_heater
 
         features = (
             ClimateEntityFeature.TARGET_TEMPERATURE |
@@ -244,9 +102,9 @@ class AE200Climate(ClimateEntity):
             ClimateEntityFeature.TURN_ON |
             ClimateEntityFeature.TURN_OFF
         )
-        if device._attributes.get("FanSpeedSW", "NONE") != "NONE":
+        if fan_speed_sw != "NONE":
             features |= ClimateEntityFeature.FAN_MODE
-        if device._attributes.get("SwingSW") == "ENABLE":
+        if device.swing_sw == "ENABLE":
             features |= ClimateEntityFeature.SWING_MODE
         self._attr_supported_features = features
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
@@ -257,19 +115,19 @@ class AE200Climate(ClimateEntity):
         self._swing_mode = None
         self._fan_mode = None
         self._hvac_mode = HVACMode.OFF
-        self._last_hvac_mode = HVACMode.COOL  # Keep track of last HVAC mode to handle turning on/off
+        self._last_hvac_mode = HVACMode.COOL
 
     @property
     def available(self) -> bool:
-        return self._device._available
+        return self._device.available
 
     @property
     def extra_state_attributes(self) -> dict:
         attrs = {}
-        if self._device._last_error_reason is not None:
-            attrs["last_error_reason"] = self._device._last_error_reason
-        if self._device._last_successful_poll is not None:
-            attrs["last_successful_poll"] = self._device._last_successful_poll
+        if self._device.last_error is not None:
+            attrs["last_error_reason"] = self._device.last_error
+        if self._device.last_successful_poll is not None:
+            attrs["last_successful_poll"] = self._device.last_successful_poll
         return attrs
 
     @property
@@ -282,21 +140,19 @@ class AE200Climate(ClimateEntity):
 
     @property
     def name(self):
-        return self._device.getName()
+        return self._device.name
 
     @property
     def unique_id(self) -> str:
-        """Return a unique ID for this climate entity."""
-        return f"{self._entry_id}_{self._device.getID()}"
+        return f"{self._entry_id}_{self._device.group_id}"
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device information about this Mitsubishi AE200 HVAC unit."""
         MODEL_NAMES = {"IC": "Air Conditioner", "WH": "Air to Water"}
         model = MODEL_NAMES.get(self._model_code, f"Unknown ({self._model_code})")
         return DeviceInfo(
-            identifiers={(DOMAIN, f"{self._entry_id}_{self._device.getID()}")},
-            name=self._device.getName(),
+            identifiers={(DOMAIN, f"{self._entry_id}_{self._device.group_id}")},
+            name=self._device.name,
             manufacturer="Mitsubishi Electric",
             model=model,
             via_device=(DOMAIN, self._entry_id),
@@ -316,14 +172,14 @@ class AE200Climate(ClimateEntity):
             return None
         else:
             return self._target_temperature
-    
+
     @property
     def target_temperature_high(self):
         if self._hvac_mode == HVACMode.HEAT_COOL:
             return self._target_temperature_high
         else:
             return None
-    
+
     @property
     def target_temperature_low(self):
         if self._hvac_mode == HVACMode.HEAT_COOL:
@@ -333,7 +189,7 @@ class AE200Climate(ClimateEntity):
 
     @property
     def min_temp(self):
-        return MIN_TEMP # Think this can be variable if the eco-protect mode is enabled, but for now we use a constant
+        return MIN_TEMP
 
     @property
     def max_temp(self):
@@ -347,50 +203,49 @@ class AE200Climate(ClimateEntity):
 
     @property
     def fan_mode(self):
-        if not self._fan_mode:
-            return None
-        if self._fan_mode in self._fan_mode_map:
+        if self._fan_mode and self._fan_mode in self._fan_mode_map:
             return self._fan_mode_map[self._fan_mode]
-        return self._fan_mode
+        # Return first valid fan mode as fallback; HA rejects None when
+        # FAN_MODE feature is supported.
+        if self._attr_fan_modes:
+            return self._attr_fan_modes[0]
+        return None
 
     @property
     def swing_mode(self):
-        if not self._swing_mode:
-            return None
-        if self._swing_mode in self._swing_mode_map:
+        if self._swing_mode and self._swing_mode in self._swing_mode_map:
             return self._swing_mode_map[self._swing_mode]
-        return self._swing_mode
+        if self._attr_swing_modes:
+            return self._attr_swing_modes[0]
+        return None
 
     @property
     def hvac_mode(self):
         return self._hvac_mode
-    
+
     async def async_turn_on(self):
         _LOGGER.info(f"Turning on HVAC mode: {self._last_hvac_mode} for {self.entity_id}")
-        await self._device.powerOn()
-        self._hvac_mode = self._last_hvac_mode # Update the home assistant state to the existing mode
-        # If the last HVAC mode was OFF, we need to set it to the last known mode
+        await self._controller.send_command(self._device.group_id, {"Drive": "ON"})
+        self._hvac_mode = self._last_hvac_mode
         self.async_write_ha_state()
-        
+
     async def async_turn_off(self):
         _LOGGER.info(f"Turning off HVAC for {self.entity_id}")
-        await self._device.powerOff()
+        await self._controller.send_command(self._device.group_id, {"Drive": "OFF"})
         self._hvac_mode = HVACMode.OFF
         self.async_write_ha_state()
-    
+
     async def async_set_swing_mode(self, swing_mode):
-        # Convert user-friendly label back to device value
         device_swing_mode = self._reverse_swing_mode_map.get(swing_mode, swing_mode)
         _LOGGER.info(f"Setting swing mode: {device_swing_mode} for {self.entity_id}")
-        await self._device.setSwingMode(device_swing_mode)
+        await self._controller.send_command(self._device.group_id, {"AirDirection": device_swing_mode})
         self._swing_mode = device_swing_mode
         self.async_write_ha_state()
 
     async def async_set_fan_mode(self, fan_mode):
-        # Convert user-friendly label back to device value
         device_fan_mode = self._reverse_fan_mode_map.get(fan_mode, fan_mode)
         _LOGGER.info(f"Setting fan mode: {device_fan_mode} for {self.entity_id}")
-        await self._device.setFanSpeed(device_fan_mode)
+        await self._controller.send_command(self._device.group_id, {"FanSpeed": device_fan_mode})
         self._fan_mode = device_fan_mode
         self.async_write_ha_state()
 
@@ -399,26 +254,35 @@ class AE200Climate(ClimateEntity):
         _LOGGER.info(kwargs)
         temperature = kwargs.get(ATTR_TEMPERATURE)
         if temperature is not None:
-            await self._device.setTemperature(temperature)
-            self._target_temperature = _round_temp(temperature)
+            temperature = _round_temp(temperature)
+            params = {"SetTemp": str(temperature)}
+            mode = self._device.mode
+            if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
+                params["SetTemp2"] = str(temperature)
+            elif mode in (Mode.Cool, Mode.Cooling, Mode.Dry, Mode.Drying, Mode.AutoCool):
+                params["SetTemp1"] = str(temperature)
+            await self._controller.send_command(self._device.group_id, params)
+            self._target_temperature = temperature
             self.async_write_ha_state()
 
         temp_low = kwargs.get("target_temp_low")
         temp_high = kwargs.get("target_temp_high")
         if temp_low is not None and temp_high is not None:
-            await self._device.setTemperatureHigh(temp_high)
-            await self._device.setTemperatureLow(temp_low)
-            self._target_temperature_low = _round_temp(temp_low)
-            self._target_temperature_high = _round_temp(temp_high)
+            temp_high = _round_temp(temp_high)
+            temp_low = _round_temp(temp_low)
+            await self._controller.send_command(self._device.group_id, {"SetTemp1": str(temp_high)})
+            await self._controller.send_command(self._device.group_id, {"SetTemp2": str(temp_low)})
+            self._target_temperature_low = temp_low
+            self._target_temperature_high = temp_high
             self.async_write_ha_state()
 
     async def async_set_hvac_mode(self, hvac_mode):
         _LOGGER.info(f"Setting HVAC mode: {hvac_mode} for {self.entity_id}")
         if hvac_mode == HVACMode.OFF:
-            await self._device.powerOff()
+            await self._controller.send_command(self._device.group_id, {"Drive": "OFF"})
             self._hvac_mode = HVACMode.OFF
         else:
-            await self._device.powerOn()
+            await self._controller.send_command(self._device.group_id, {"Drive": "ON"})
             mode_map = {
                 HVACMode.HEAT: Mode.Heat,
                 HVACMode.COOL: Mode.Cool,
@@ -426,31 +290,44 @@ class AE200Climate(ClimateEntity):
                 HVACMode.FAN_ONLY: Mode.Fan,
                 HVACMode.HEAT_COOL: Mode.Auto,
             }
-            await self._device.setMode(mode_map.get(hvac_mode, Mode.Auto))
+            await self._controller.send_command(
+                self._device.group_id, {"Mode": mode_map.get(hvac_mode, Mode.Auto)}
+            )
             self._hvac_mode = hvac_mode
         self.async_write_ha_state()
 
     async def async_update(self):
         _LOGGER.info(f"Updating climate entity: {self.entity_id}")
-        await self._device._refresh_device_info_async()
-        model = await self._device.getModel()
+        await self._controller.poll_device(self._device.group_id)
+
+        model = self._device.model
         if model != self._model_code:
             self._model_code = model
-            self._is_water_heater = await self._device.isWaterHeater()
+            self._is_water_heater = self._device.is_water_heater
             if model not in ("IC", "WH"):
                 _LOGGER.warning(
                     f"Unrecognized unit model '{model}' for {self.entity_id}; "
                     f"using HVAC defaults. See "
                     f"https://github.com/sftgunner/mitsubishi-ae200-integration/blob/main/ADDING_DEVICE_TYPES.md"
                 )
-        self._current_temperature = await self._device.getRoomTemperature()
-        self._fan_mode = await self._device.getFanSpeed()
-        self._swing_mode = await self._device.getSwingMode()
-        if await self._device.isPowerOn():
-            self._target_temperature = await self._device.getTargetTemperature()
-            self._target_temperature_high = await self._device.getTargetTemperatureHigh()
-            self._target_temperature_low = await self._device.getTargetTemperatureLow()
-            mode = await self._device.getMode()
+        self._current_temperature = self._device.inlet_temp
+        self._fan_mode = self._device.fan_speed
+        self._swing_mode = self._device.air_direction
+
+        if self._device.drive == "ON":
+            # Target temperature: SetTemp is primary, fall back to mode-specific
+            temp = self._device.set_temp
+            if temp is None:
+                mode = self._device.mode
+                if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
+                    temp = self._device.set_temp2
+                else:
+                    temp = self._device.set_temp1
+            self._target_temperature = temp
+            self._target_temperature_high = self._device.set_temp1
+            self._target_temperature_low = self._device.set_temp2
+
+            mode = self._device.mode
             if mode in (Mode.Heat, Mode.Heating):
                 self._hvac_mode = HVACMode.HEAT
             elif mode in (Mode.Cool, Mode.Cooling):
@@ -459,7 +336,7 @@ class AE200Climate(ClimateEntity):
                 self._hvac_mode = HVACMode.DRY
             elif mode == Mode.Fan:
                 self._hvac_mode = HVACMode.FAN_ONLY
-                self._target_temperature = None # Special case where there is no target temperature for fan mode
+                self._target_temperature = None
             elif mode in (Mode.Auto, Mode.AutoCool, Mode.AutoHeat):
                 self._hvac_mode = HVACMode.HEAT_COOL
             else:
@@ -480,28 +357,16 @@ async def async_setup_entry(
     """Set up Mitsubishi AE200 climate entities from a config entry."""
     _LOGGER.info("Setting up Mitsubishi AE200 climate platform from config entry...")
 
+    data = hass.data[DOMAIN][entry.entry_id]
+    controller = data["controller"]
     controllerid = entry.data[CONF_CONTROLLER_ID]
-    ipaddress = entry.data[CONF_IP_ADDRESS]
 
-    mitsubishi_ae200_functions = MitsubishiAE200Functions()
-    devices = []
-    
-    try:
-        # Get device list from controller
-        group_list = await mitsubishi_ae200_functions.getDevicesAsync(ipaddress)
-        _LOGGER.info(group_list)
-        for group in group_list:
-            device = AE200Device(ipaddress, group["id"], group["name"], mitsubishi_ae200_functions)
-            try:
-                await device._refresh_device_info_async()
-            except Exception:
-                _LOGGER.warning(f"Could not fetch initial device info for {group['name']}")
-            devices.append(AE200Climate(hass, device, controllerid, entry.entry_id))
+    entities = []
+    for device in controller.devices.values():
+        entities.append(AE200Climate(hass, controller, device, controllerid, entry.entry_id))
 
-        if devices:
-            async_add_entities(devices, update_before_add=True)
-            _LOGGER.info(f"Added {len(devices)} Mitsubishi AE200 device(s).")
-        else:
-            _LOGGER.warning("No Mitsubishi AE200 devices found.")
-    except Exception as err:
-        _LOGGER.error(f"Error setting up Mitsubishi AE200 devices: {err}")
+    if entities:
+        async_add_entities(entities, update_before_add=True)
+        _LOGGER.info(f"Added {len(entities)} Mitsubishi AE200 climate device(s).")
+    else:
+        _LOGGER.warning("No Mitsubishi AE200 devices found.")

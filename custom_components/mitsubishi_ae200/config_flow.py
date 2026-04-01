@@ -9,7 +9,8 @@ from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResult
 import homeassistant.helpers.config_validation as cv
 
-from .mitsubishi_ae200 import MitsubishiAE200Functions
+from .ae200lib.controller import AE200Controller
+
 from .const import DOMAIN, CONF_CONTROLLER_ID
 
 _LOGGER = logging.getLogger(__name__)
@@ -23,19 +24,15 @@ STEP_USER_DATA_SCHEMA = vol.Schema(
 
 
 async def validate_input(hass: HomeAssistant, data: dict[str, Any]) -> dict[str, Any]:
-    """Validate the user input allows us to connect.
-    
-    Data has the keys from STEP_USER_DATA_SCHEMA with values provided by the user.
-    """
-    mitsubishi_ae200_functions = MitsubishiAE200Functions()
-    
+    """Validate the user input allows us to connect."""
+    controller = AE200Controller(data[CONF_IP_ADDRESS])
+
     try:
-        # Test connection by getting device list
-        devices = await mitsubishi_ae200_functions.getDevicesAsync(data[CONF_IP_ADDRESS])
-        
+        devices = await controller.discover_devices()
+
         if not devices:
             raise ValueError("No devices found")
-            
+
         return {
             "title": f"Mitsubishi AE200 ({data[CONF_CONTROLLER_ID]})",
             "num_devices": len(devices)
@@ -61,14 +58,13 @@ class MitsubishiAE200ConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 info = await validate_input(self.hass, user_input)
             except ValueError:
                 errors["base"] = "no_devices"
-            except Exception:  # pylint: disable=broad-except
+            except Exception:
                 _LOGGER.exception("Unexpected exception")
                 errors["base"] = "cannot_connect"
             else:
-                # Check if already configured
                 await self.async_set_unique_id(user_input[CONF_CONTROLLER_ID])
                 self._abort_if_unique_id_configured()
-                
+
                 return self.async_create_entry(title=info["title"], data=user_input)
 
         return self.async_show_form(

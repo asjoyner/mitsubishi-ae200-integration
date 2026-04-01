@@ -6,13 +6,14 @@ from homeassistant.components.binary_sensor import (
     BinarySensorEntity,
 )
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import CONF_IP_ADDRESS
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity import generate_entity_id
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.entity import DeviceInfo
 
-from .mitsubishi_ae200 import MitsubishiAE200Functions
+from .ae200lib.controller import AE200Controller
+from .ae200lib.device import DeviceState
+
 from .const import DOMAIN, CONF_CONTROLLER_ID
 
 _LOGGER = logging.getLogger(__name__)
@@ -21,13 +22,14 @@ _LOGGER = logging.getLogger(__name__)
 class AE200FilterSignSensor(BinarySensorEntity):
     """Binary sensor for AE200 filter sign status."""
 
-    def __init__(self, hass, device, controllerid: str, entry_id: str):
-        """Initialize the filter sign sensor."""
+    def __init__(self, hass, controller: AE200Controller, device: DeviceState,
+                 controllerid: str, entry_id: str):
+        self._controller = controller
         self._device = device
         self._entry_id = entry_id
         self.entity_id = generate_entity_id(
             "binary_sensor.{}",
-            f"mitsubishi_ae_200_{controllerid}_{device.getName()}_filter",
+            f"mitsubishi_ae_200_{controllerid}_{device.name}_filter",
             None,
             hass,
         )
@@ -35,20 +37,17 @@ class AE200FilterSignSensor(BinarySensorEntity):
 
     @property
     def unique_id(self) -> str:
-        """Return a unique ID for this binary sensor."""
-        return f"{self._entry_id}_{self._device.getID()}_filter"
+        return f"{self._entry_id}_{self._device.group_id}_filter"
 
     @property
     def name(self) -> str:
-        """Return the name of the binary sensor."""
-        return f"{self._device.getName()} Filter Sign"
+        return f"{self._device.name} Filter Sign"
 
     @property
     def device_info(self) -> DeviceInfo:
-        """Return device information about this sensor."""
         return DeviceInfo(
-            identifiers={(DOMAIN, f"{self._entry_id}_{self._device.getID()}")},
-            name=self._device.getName(),
+            identifiers={(DOMAIN, f"{self._entry_id}_{self._device.group_id}")},
+            name=self._device.name,
             manufacturer="Mitsubishi Electric",
             model="HVAC Unit",
             via_device=(DOMAIN, self._entry_id),
@@ -56,27 +55,25 @@ class AE200FilterSignSensor(BinarySensorEntity):
 
     @property
     def available(self) -> bool:
-        return self._device._available
+        return self._device.available
 
     @property
     def extra_state_attributes(self) -> dict:
         attrs = {}
-        if self._device._last_error_reason is not None:
-            attrs["last_error_reason"] = self._device._last_error_reason
-        if self._device._last_successful_poll is not None:
-            attrs["last_successful_poll"] = self._device._last_successful_poll
+        if self._device.last_error is not None:
+            attrs["last_error_reason"] = self._device.last_error
+        if self._device.last_successful_poll is not None:
+            attrs["last_successful_poll"] = self._device.last_successful_poll
         return attrs
 
     @property
     def is_on(self) -> bool:
-        """Return True if filter sign is ON."""
         return self._attr_is_on
 
     async def async_update(self):
-        """Update the filter sign status."""
-        await self._device._refresh_device_info_async()
-        filter_sign = await self._device.getFilterSign()
-        self._attr_is_on = filter_sign == "ON"
+        # Device state is already polled by the shared controller via climate.
+        # We just read from the shared DeviceState — no duplicate WebSocket call.
+        self._attr_is_on = self._device.filter_sign == "ON"
 
 
 class AE200ErrorSignSensor(BinarySensorEntity):
@@ -84,12 +81,14 @@ class AE200ErrorSignSensor(BinarySensorEntity):
 
     _attr_device_class = BinarySensorDeviceClass.PROBLEM
 
-    def __init__(self, hass, device, controllerid: str, entry_id: str):
+    def __init__(self, hass, controller: AE200Controller, device: DeviceState,
+                 controllerid: str, entry_id: str):
+        self._controller = controller
         self._device = device
         self._entry_id = entry_id
         self.entity_id = generate_entity_id(
             "binary_sensor.{}",
-            f"mitsubishi_ae_200_{controllerid}_{device.getName()}_error",
+            f"mitsubishi_ae_200_{controllerid}_{device.name}_error",
             None,
             hass,
         )
@@ -97,17 +96,17 @@ class AE200ErrorSignSensor(BinarySensorEntity):
 
     @property
     def unique_id(self) -> str:
-        return f"{self._entry_id}_{self._device.getID()}_error"
+        return f"{self._entry_id}_{self._device.group_id}_error"
 
     @property
     def name(self) -> str:
-        return f"{self._device.getName()} Error Sign"
+        return f"{self._device.name} Error Sign"
 
     @property
     def device_info(self) -> DeviceInfo:
         return DeviceInfo(
-            identifiers={(DOMAIN, f"{self._entry_id}_{self._device.getID()}")},
-            name=self._device.getName(),
+            identifiers={(DOMAIN, f"{self._entry_id}_{self._device.group_id}")},
+            name=self._device.name,
             manufacturer="Mitsubishi Electric",
             model="HVAC Unit",
             via_device=(DOMAIN, self._entry_id),
@@ -115,15 +114,15 @@ class AE200ErrorSignSensor(BinarySensorEntity):
 
     @property
     def available(self) -> bool:
-        return self._device._available
+        return self._device.available
 
     @property
     def extra_state_attributes(self) -> dict:
         attrs = {}
-        if self._device._last_error_reason is not None:
-            attrs["last_error_reason"] = self._device._last_error_reason
-        if self._device._last_successful_poll is not None:
-            attrs["last_successful_poll"] = self._device._last_successful_poll
+        if self._device.last_error is not None:
+            attrs["last_error_reason"] = self._device.last_error
+        if self._device.last_successful_poll is not None:
+            attrs["last_successful_poll"] = self._device.last_successful_poll
         return attrs
 
     @property
@@ -131,9 +130,8 @@ class AE200ErrorSignSensor(BinarySensorEntity):
         return self._attr_is_on
 
     async def async_update(self):
-        await self._device._refresh_device_info_async()
-        error_sign = await self._device.getErrorSign()
-        self._attr_is_on = error_sign == "ON"
+        # Read from shared DeviceState — no duplicate polling
+        self._attr_is_on = self._device.error_sign == "ON"
 
 
 async def async_setup_entry(
@@ -144,32 +142,21 @@ async def async_setup_entry(
     """Set up binary sensors from a config entry."""
     _LOGGER.info("Setting up Mitsubishi AE200 binary sensors from config entry...")
 
+    data = hass.data[DOMAIN][entry.entry_id]
+    controller = data["controller"]
     controllerid = entry.data[CONF_CONTROLLER_ID]
-    ipaddress = entry.data[CONF_IP_ADDRESS]
 
-    mitsubishi_ae200_functions = MitsubishiAE200Functions()
     sensors = []
+    for device in controller.devices.values():
+        sensors.append(
+            AE200FilterSignSensor(hass, controller, device, controllerid, entry.entry_id)
+        )
+        sensors.append(
+            AE200ErrorSignSensor(hass, controller, device, controllerid, entry.entry_id)
+        )
 
-    try:
-        # Get device list from controller
-        group_list = await mitsubishi_ae200_functions.getDevicesAsync(ipaddress)
-        for group in group_list:
-            from .climate import AE200Device
-
-            device = AE200Device(
-                ipaddress, group["id"], group["name"], mitsubishi_ae200_functions
-            )
-            sensors.append(
-                AE200FilterSignSensor(hass, device, controllerid, entry.entry_id)
-            )
-            sensors.append(
-                AE200ErrorSignSensor(hass, device, controllerid, entry.entry_id)
-            )
-
-        if sensors:
-            async_add_entities(sensors, update_before_add=True)
-            _LOGGER.info(f"Added {len(sensors)} Mitsubishi AE200 binary sensor(s).")
-        else:
-            _LOGGER.warning("No Mitsubishi AE200 devices found.")
-    except Exception as err:
-        _LOGGER.error(f"Error setting up Mitsubishi AE200 binary sensors: {err}")
+    if sensors:
+        async_add_entities(sensors, update_before_add=True)
+        _LOGGER.info(f"Added {len(sensors)} Mitsubishi AE200 binary sensor(s).")
+    else:
+        _LOGGER.warning("No Mitsubishi AE200 devices found.")

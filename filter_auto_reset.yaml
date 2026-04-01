@@ -1,0 +1,404 @@
+# Filter Auto-Reset Package for Mitsubishi AE-200
+#
+# The indoor units trigger a filter warning every ~100 hours of runtime.
+# With 24/7 operation, that's every ~4 days. This package auto-resets
+# the warning up to a configurable number of times per zone, then lets
+# it persist so you know it's time to actually clean the filters.
+#
+# Two filter stages:
+#   - Mesh pre-filter (all zones): clean monthly (~7 cycles of 100h)
+#   - EAC electrostatic cells (all except Vault): clean every 3 months (~21 cycles)
+#
+# Zone mapping:
+#   Group 1 = Vault (mesh only, limit 7)
+#   Group 2 = Main South (mesh + EAC, limit 21)
+#   Group 3 = Upstairs (mesh + EAC, limit 21)
+#   Group 4 = Downstairs (mesh + EAC, limit 21)
+#   Group 5 = Master Bedroom (mesh + EAC, limit 21)
+
+counter:
+  filter_reset_vault:
+    name: "Filter Auto-Reset Count: Vault"
+    initial: 0
+    step: 1
+    icon: mdi:air-filter
+  filter_reset_main_south:
+    name: "Filter Auto-Reset Count: Main South"
+    initial: 0
+    step: 1
+    icon: mdi:air-filter
+  filter_reset_upstairs:
+    name: "Filter Auto-Reset Count: Upstairs"
+    initial: 0
+    step: 1
+    icon: mdi:air-filter
+  filter_reset_downstairs:
+    name: "Filter Auto-Reset Count: Downstairs"
+    initial: 0
+    step: 1
+    icon: mdi:air-filter
+  filter_reset_master_bedroom:
+    name: "Filter Auto-Reset Count: Master Bedroom"
+    initial: 0
+    step: 1
+    icon: mdi:air-filter
+
+input_number:
+  filter_reset_limit_vault:
+    name: "Filter Reset Limit: Vault"
+    min: 1
+    max: 50
+    step: 1
+    initial: 7
+    mode: box
+    icon: mdi:air-filter
+  filter_reset_limit_main_south:
+    name: "Filter Reset Limit: Main South"
+    min: 1
+    max: 50
+    step: 1
+    initial: 21
+    mode: box
+    icon: mdi:air-filter
+  filter_reset_limit_upstairs:
+    name: "Filter Reset Limit: Upstairs"
+    min: 1
+    max: 50
+    step: 1
+    initial: 21
+    mode: box
+    icon: mdi:air-filter
+  filter_reset_limit_downstairs:
+    name: "Filter Reset Limit: Downstairs"
+    min: 1
+    max: 50
+    step: 1
+    initial: 21
+    mode: box
+    icon: mdi:air-filter
+  filter_reset_limit_master_bedroom:
+    name: "Filter Reset Limit: Master Bedroom"
+    min: 1
+    max: 50
+    step: 1
+    initial: 21
+    mode: box
+    icon: mdi:air-filter
+
+input_button:
+  filter_cleaned_vault:
+    name: "Filter Cleaned: Vault"
+    icon: mdi:air-filter
+  filter_cleaned_main_south:
+    name: "Filter Cleaned: Main South"
+    icon: mdi:air-filter
+  filter_cleaned_upstairs:
+    name: "Filter Cleaned: Upstairs"
+    icon: mdi:air-filter
+  filter_cleaned_downstairs:
+    name: "Filter Cleaned: Downstairs"
+    icon: mdi:air-filter
+  filter_cleaned_master_bedroom:
+    name: "Filter Cleaned: Master Bedroom"
+    icon: mdi:air-filter
+
+automation:
+  # --- Auto-reset automations: one per zone ---
+
+  - id: filter_auto_reset_vault
+    alias: "Filter Auto-Reset: Vault"
+    description: "Auto-reset filter sign on Vault (group 1) up to the configured limit"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_vault_filter
+        to: "on"
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_vault_filter
+        state: "on"
+      - condition: numeric_state
+        entity_id: counter.filter_reset_vault
+        below: input_number.filter_reset_limit_vault
+    actions:
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "1"
+      - action: counter.increment
+        target:
+          entity_id: counter.filter_reset_vault
+      - condition: template
+        value_template: >-
+          {{ states('counter.filter_reset_vault') | int ==
+             states('input_number.filter_reset_limit_vault') | int }}
+      - action: notify.persistent_notification
+        data:
+          title: "Filter Maintenance: Vault"
+          message: >-
+            Vault filter has been auto-reset {{ states('counter.filter_reset_vault') }}
+            times (~{{ (states('counter.filter_reset_vault') | int * 100 / 24) | round(0) }} days).
+            Time to clean the mesh pre-filter. Next filter sign will persist until manually reset.
+
+  - id: filter_auto_reset_main_south
+    alias: "Filter Auto-Reset: Main South"
+    description: "Auto-reset filter sign on Main South (group 2) up to the configured limit"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_main_level_left_filter
+        to: "on"
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_main_level_left_filter
+        state: "on"
+      - condition: numeric_state
+        entity_id: counter.filter_reset_main_south
+        below: input_number.filter_reset_limit_main_south
+    actions:
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "2"
+      - action: counter.increment
+        target:
+          entity_id: counter.filter_reset_main_south
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('counter.filter_reset_main_south') | int == 7 }}
+            sequence:
+              - action: notify.persistent_notification
+                data:
+                  title: "Filter Maintenance: Main South"
+                  message: >-
+                    Main South mesh pre-filter has been running for ~1 month.
+                    Consider cleaning the mesh filter. EAC cells due at ~3 months.
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('counter.filter_reset_main_south') | int ==
+                     states('input_number.filter_reset_limit_main_south') | int }}
+            sequence:
+              - action: notify.persistent_notification
+                data:
+                  title: "Filter Maintenance: Main South"
+                  message: >-
+                    Main South filters have been auto-reset {{ states('counter.filter_reset_main_south') }}
+                    times (~{{ (states('counter.filter_reset_main_south') | int * 100 / 24) | round(0) }} days).
+                    Time to clean mesh pre-filter and EAC collection cells. Next filter sign will persist.
+
+  - id: filter_auto_reset_upstairs
+    alias: "Filter Auto-Reset: Upstairs"
+    description: "Auto-reset filter sign on Upstairs (group 3) up to the configured limit"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_upstairs_filter
+        to: "on"
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_upstairs_filter
+        state: "on"
+      - condition: numeric_state
+        entity_id: counter.filter_reset_upstairs
+        below: input_number.filter_reset_limit_upstairs
+    actions:
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "3"
+      - action: counter.increment
+        target:
+          entity_id: counter.filter_reset_upstairs
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('counter.filter_reset_upstairs') | int == 7 }}
+            sequence:
+              - action: notify.persistent_notification
+                data:
+                  title: "Filter Maintenance: Upstairs"
+                  message: >-
+                    Upstairs mesh pre-filter has been running for ~1 month.
+                    Consider cleaning the mesh filter. EAC cells due at ~3 months.
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('counter.filter_reset_upstairs') | int ==
+                     states('input_number.filter_reset_limit_upstairs') | int }}
+            sequence:
+              - action: notify.persistent_notification
+                data:
+                  title: "Filter Maintenance: Upstairs"
+                  message: >-
+                    Upstairs filters have been auto-reset {{ states('counter.filter_reset_upstairs') }}
+                    times (~{{ (states('counter.filter_reset_upstairs') | int * 100 / 24) | round(0) }} days).
+                    Time to clean mesh pre-filter and EAC collection cells. Next filter sign will persist.
+
+  - id: filter_auto_reset_downstairs
+    alias: "Filter Auto-Reset: Downstairs"
+    description: "Auto-reset filter sign on Downstairs (group 4) up to the configured limit"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_downstairs_filter
+        to: "on"
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_downstairs_filter
+        state: "on"
+      - condition: numeric_state
+        entity_id: counter.filter_reset_downstairs
+        below: input_number.filter_reset_limit_downstairs
+    actions:
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "4"
+      - action: counter.increment
+        target:
+          entity_id: counter.filter_reset_downstairs
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('counter.filter_reset_downstairs') | int == 7 }}
+            sequence:
+              - action: notify.persistent_notification
+                data:
+                  title: "Filter Maintenance: Downstairs"
+                  message: >-
+                    Downstairs mesh pre-filter has been running for ~1 month.
+                    Consider cleaning the mesh filter. EAC cells due at ~3 months.
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('counter.filter_reset_downstairs') | int ==
+                     states('input_number.filter_reset_limit_downstairs') | int }}
+            sequence:
+              - action: notify.persistent_notification
+                data:
+                  title: "Filter Maintenance: Downstairs"
+                  message: >-
+                    Downstairs filters have been auto-reset {{ states('counter.filter_reset_downstairs') }}
+                    times (~{{ (states('counter.filter_reset_downstairs') | int * 100 / 24) | round(0) }} days).
+                    Time to clean mesh pre-filter and EAC collection cells. Next filter sign will persist.
+
+  - id: filter_auto_reset_master_bedroom
+    alias: "Filter Auto-Reset: Master Bedroom"
+    description: "Auto-reset filter sign on Master Bedroom (group 5) up to the configured limit"
+    triggers:
+      - trigger: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_master_bedroom_filter
+        to: "on"
+      - trigger: homeassistant
+        event: start
+    conditions:
+      - condition: state
+        entity_id: binary_sensor.mitsubishi_ae_200_geothermal_master_bedroom_filter
+        state: "on"
+      - condition: numeric_state
+        entity_id: counter.filter_reset_master_bedroom
+        below: input_number.filter_reset_limit_master_bedroom
+    actions:
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "5"
+      - action: counter.increment
+        target:
+          entity_id: counter.filter_reset_master_bedroom
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('counter.filter_reset_master_bedroom') | int == 7 }}
+            sequence:
+              - action: notify.persistent_notification
+                data:
+                  title: "Filter Maintenance: Master Bedroom"
+                  message: >-
+                    Master Bedroom mesh pre-filter has been running for ~1 month.
+                    Consider cleaning the mesh filter. EAC cells due at ~3 months.
+          - conditions:
+              - condition: template
+                value_template: >-
+                  {{ states('counter.filter_reset_master_bedroom') | int ==
+                     states('input_number.filter_reset_limit_master_bedroom') | int }}
+            sequence:
+              - action: notify.persistent_notification
+                data:
+                  title: "Filter Maintenance: Master Bedroom"
+                  message: >-
+                    Master Bedroom filters have been auto-reset {{ states('counter.filter_reset_master_bedroom') }}
+                    times (~{{ (states('counter.filter_reset_master_bedroom') | int * 100 / 24) | round(0) }} days).
+                    Time to clean mesh pre-filter and EAC collection cells. Next filter sign will persist.
+
+  # --- "I cleaned the filters" automations: zero counter + reset sign ---
+
+  - id: filter_cleaned_vault
+    alias: "Filter Cleaned: Vault"
+    triggers:
+      - trigger: state
+        entity_id: input_button.filter_cleaned_vault
+    actions:
+      - action: counter.reset
+        target:
+          entity_id: counter.filter_reset_vault
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "1"
+
+  - id: filter_cleaned_main_south
+    alias: "Filter Cleaned: Main South"
+    triggers:
+      - trigger: state
+        entity_id: input_button.filter_cleaned_main_south
+    actions:
+      - action: counter.reset
+        target:
+          entity_id: counter.filter_reset_main_south
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "2"
+
+  - id: filter_cleaned_upstairs
+    alias: "Filter Cleaned: Upstairs"
+    triggers:
+      - trigger: state
+        entity_id: input_button.filter_cleaned_upstairs
+    actions:
+      - action: counter.reset
+        target:
+          entity_id: counter.filter_reset_upstairs
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "3"
+
+  - id: filter_cleaned_downstairs
+    alias: "Filter Cleaned: Downstairs"
+    triggers:
+      - trigger: state
+        entity_id: input_button.filter_cleaned_downstairs
+    actions:
+      - action: counter.reset
+        target:
+          entity_id: counter.filter_reset_downstairs
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "4"
+
+  - id: filter_cleaned_master_bedroom
+    alias: "Filter Cleaned: Master Bedroom"
+    triggers:
+      - trigger: state
+        entity_id: input_button.filter_cleaned_master_bedroom
+    actions:
+      - action: counter.reset
+        target:
+          entity_id: counter.filter_reset_master_bedroom
+      - action: mitsubishi_ae200.filter_reset
+        data:
+          group_id: "5"

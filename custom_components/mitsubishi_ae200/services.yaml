@@ -1,0 +1,11 @@
+filter_reset:
+  name: Reset Filter Sign
+  description: Reset the filter sign for a specific HVAC group, clearing the warning and cumulative runtime counter.
+  fields:
+    group_id:
+      name: Group ID
+      description: The AE-200 group number to reset (e.g. "1" for Vault, "2" for Main South).
+      required: true
+      example: "1"
+      selector:
+        text:
