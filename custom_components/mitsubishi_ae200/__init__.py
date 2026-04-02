@@ -53,7 +53,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             ctrl = entry_data["controller"]
             if group_id in ctrl.devices:
                 _LOGGER.info("Resetting filter sign for group %s", group_id)
-                await ctrl.send_command(group_id, {"FilterReset": "RESET"})
+                await ctrl.send_command(group_id, {"FilterSign": "RESET"})
                 return
         _LOGGER.warning("Group %s not found on any AE-200 controller", group_id)
 
