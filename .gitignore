@@ -1,3 +1,8 @@
 
 .DS_Store
 *.pyc
+__pycache__/
+.claude/
+venv/
+*.egg-info/
+ae200mon.yaml
