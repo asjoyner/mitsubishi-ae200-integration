@@ -270,8 +270,10 @@ class AE200Climate(ClimateEntity):
         if temp_low is not None and temp_high is not None:
             temp_high = _round_temp(temp_high)
             temp_low = _round_temp(temp_low)
-            await self._controller.send_command(self._device.group_id, {"SetTemp1": str(temp_high)})
-            await self._controller.send_command(self._device.group_id, {"SetTemp2": str(temp_low)})
+            await self._controller.send_command(self._device.group_id, {
+                "SetTemp1": str(temp_high),
+                "SetTemp2": str(temp_low),
+            })
             self._target_temperature_low = temp_low
             self._target_temperature_high = temp_high
             self.async_write_ha_state()
