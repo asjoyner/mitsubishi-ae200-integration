@@ -1,0 +1,329 @@
+#!/usr/bin/env python3
+"""ae200ctl - CLI tool for querying and configuring Mitsubishi AE-200 controllers.
+
+Usage:
+    ae200ctl --host <ip> list
+    ae200ctl --host <ip> status [--group N]
+    ae200ctl --host <ip> set <group> key=value [key=value ...]
+    ae200ctl --host <ip> system
+    ae200ctl --host <ip> mnet-status
+    ae200ctl --host <ip> groups
+    ae200ctl --host <ip> areas
+    ae200ctl --host <ip> interlocks
+    ae200ctl --host <ip> alarms
+    ae200ctl --host <ip> functions
+    ae200ctl --host <ip> schedule
+    ae200ctl --host <ip> energy
+    ae200ctl --host <ip> raw <get|set> <xml_body>
+
+All output is JSON for easy parsing by humans and scripts.
+"""
+
+import argparse
+import asyncio
+import json
+import sys
+import xml.etree.ElementTree as ET
+
+from ae200lib.transport import ws_request
+from ae200lib.protocol import (
+    get_request,
+    set_request,
+    wrap,
+    mnet_query,
+    system_query,
+    parse_response,
+)
+
+
+# ---------------------------------------------------------------------------
+# Commands
+# ---------------------------------------------------------------------------
+
+async def cmd_list(host: str, _args) -> dict:
+    """List all device groups on the controller."""
+    payload = get_request("<ControlGroup><MnetList /></ControlGroup>")
+    raw = await ws_request(host, payload)
+    root = ET.fromstring(raw)
+    groups = []
+    for r in root.findall(".//MnetRecord"):
+        groups.append({"id": r.get("Group"), "name": r.get("GroupNameWeb")})
+    return {"groups": groups}
+
+
+async def cmd_status(host: str, args) -> dict:
+    """Get runtime status for one or all devices."""
+    if args.group:
+        ids = [args.group]
+    else:
+        listing = await cmd_list(host, args)
+        ids = [g["id"] for g in listing["groups"]]
+
+    raw = await ws_request(host, mnet_query(ids))
+    root = ET.fromstring(raw)
+    devices = []
+    for mnet in root.findall(".//Mnet"):
+        devices.append(dict(mnet.attrib))
+    if len(devices) == 1:
+        return devices[0]
+    return {"devices": devices}
+
+
+async def cmd_set(host: str, args) -> dict:
+    """Set attributes on a device group."""
+    attrs = {}
+    for kv in args.settings:
+        if "=" not in kv:
+            return {"error": f"Invalid setting '{kv}', expected key=value"}
+        k, v = kv.split("=", 1)
+        attrs[k] = v
+
+    attr_str = " ".join(f'{k}="{v}"' for k, v in attrs.items())
+    payload = set_request(f'<Mnet Group="{args.group}" {attr_str} />')
+    raw = await ws_request(host, payload)
+    result = parse_response(raw)
+    result["requested"] = {"group": args.group, **attrs}
+    return result
+
+
+async def cmd_system(host: str, _args) -> dict:
+    """Get system-level configuration."""
+    raw = await ws_request(host, system_query())
+    return parse_response(raw)
+
+
+async def cmd_mnet_status(host: str, _args) -> dict:
+    """Get M-NET bus status and per-unit health summary."""
+    bus_raw = await ws_request(host, get_request('<SystemData MnetStatus="*" />'))
+    bus = parse_response(bus_raw)
+    mnet_status = bus.get("SystemData", {}).get("MnetStatus", "UNKNOWN")
+
+    listing = await cmd_list(host, _args)
+    ids = [g["id"] for g in listing["groups"]]
+    health_attrs = ("ErrorSign", "ModeStatus", "Drive", "Mode", "InletTemp", "SetTemp", "Model", "FilterSign")
+    attrs_str = " ".join(f'{a}="*"' for a in health_attrs)
+    mnets = "".join(f'<Mnet Group="{gid}" {attrs_str} />' for gid in ids)
+    units_raw = await ws_request(host, get_request(mnets))
+    root = ET.fromstring(units_raw)
+    units = []
+    for mnet in root.findall(".//Mnet"):
+        units.append(dict(mnet.attrib))
+
+    return {"mnet_bus": mnet_status, "units": units}
+
+
+async def cmd_groups(host: str, _args) -> dict:
+    """Get control group configuration."""
+    payload = get_request("<ControlGroup><MnetGroupList /></ControlGroup>")
+    raw = await ws_request(host, payload)
+    return parse_response(raw)
+
+
+async def cmd_areas(host: str, _args) -> dict:
+    """Get area group and area list configuration."""
+    payload = get_request("<ControlGroup><AreaGroupList /><AreaList /></ControlGroup>")
+    raw = await ws_request(host, payload)
+    return parse_response(raw)
+
+
+async def cmd_interlocks(host: str, _args) -> dict:
+    """Get interlock configuration."""
+    payload = get_request("<ControlGroup><InterlockList /></ControlGroup>")
+    raw = await ws_request(host, payload)
+    return parse_response(raw)
+
+
+async def cmd_alarms(host: str, _args) -> dict:
+    """Get alarm configuration."""
+    payload = get_request(
+        "<Alarm><AlarmCodeList /><AlarmRouteList /></Alarm>"
+    )
+    raw = await ws_request(host, payload)
+    return parse_response(raw)
+
+
+async def cmd_functions(host: str, _args) -> dict:
+    """Get licensed function list with resolved names."""
+    payload = get_request(
+        "<FunctionControl><FunctionList /></FunctionControl>"
+    )
+    raw = await ws_request(host, payload)
+    result = parse_response(raw)
+    records = (
+        result.get("FunctionControl", {})
+        .get("FunctionList", {})
+        .get("FunctionRecord", [])
+    )
+    if isinstance(records, dict):
+        records = [records]
+    functions = []
+    for rec in records:
+        idx = rec.get("Index", "")
+        functions.append({
+            "index": idx,
+            "name": FUNCTION_NAMES.get(idx, f"Unknown_{idx}"),
+            "status": rec.get("Status", ""),
+            "time_limit": rec.get("TimeLimit", ""),
+        })
+    return {"functions": functions}
+
+
+async def cmd_schedule(host: str, _args) -> dict:
+    """Get schedule control and season type configuration."""
+    payload = get_request('<ScheduleControl SeasonType="*" />')
+    raw = await ws_request(host, payload)
+    return parse_response(raw)
+
+
+async def cmd_energy(host: str, _args) -> dict:
+    """Get energy management configuration."""
+    payload = get_request(
+        "<EnergyManagement><UnitSourceList /></EnergyManagement>"
+    )
+    raw = await ws_request(host, payload)
+    return parse_response(raw)
+
+
+async def cmd_raw(host: str, args) -> dict:
+    """Send a raw XML body inside the Packet/DatabaseManager envelope."""
+    command = "getRequest" if args.command == "get" else "setRequest"
+    payload = wrap(command, args.xml_body)
+    raw = await ws_request(host, payload, timeout=args.timeout)
+    return parse_response(raw)
+
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+# Licensed feature names by 1-based index (from FunctionControl.IndexValues enum)
+FUNCTION_NAMES = {
+    "1": "Web",
+    "2": "Schedule",
+    "3": "Account",
+    "4": "BeforeErrorData",
+    "5": "SendErrorMail",
+    "6": "SaveEnergyControl",
+    "7": "Maintenance_Simple",
+    "8": "IndividualBrowser",
+    "9": "BACnet",
+    "10": "Maintenance_Full",
+    "11": "SaveEnergyControl_Peakcut",
+    "12": "GeneralContactPLC",
+    "13": "LicensePack_GB50A",
+    "14": "OutdoorMeasurement",
+    "15": "LicensePack_AG150A",
+    "16": "LicensePack_Energy",
+    "17": "LicensePack_GB24A",
+    "18": "InterlockControl",
+    "19": "TG2000",
+    "20": "LicensePack_GB50ADA",
+    "21": "HeatPumpWaterHeater",
+    "22": "EControl",
+    "23": "ETShiftControl",
+    "24": "ETShiftSaveEnergy",
+    "25": "SuperUser",
+    "26": "OutdoorDriveMonitor",
+    "27": "EnergyMonitor",
+    "28": "MaintenanceMonitor",
+    "29": "LicensePack_EB50GU",
+    "30": "BACnet_AE",
+    "31": "ColdMeltouch",
+    "32": "HighSensibleHeatControl",
+    "33": "NewWebBrowser",
+    "34": "TenantAdministrator",
+    "35": "DTRConnect",
+    "36": "FXConnect",
+    "37": "LicensePack_RMI",
+    "38": "BrainCooler",
+}
+
+
+def build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(
+        prog="ae200ctl",
+        description="Query and configure Mitsubishi AE-200 controllers.",
+    )
+    p.add_argument("--host", required=True, help="IP address of the AE-200 controller")
+    p.add_argument(
+        "--timeout", type=float, default=10.0,
+        help="WebSocket response timeout in seconds (default: 10)",
+    )
+    p.add_argument(
+        "--raw-xml", action="store_true",
+        help="Include raw XML response in output",
+    )
+
+    sub = p.add_subparsers(dest="subcommand", required=True)
+
+    sub.add_parser("list", help="List all device groups")
+
+    sp_status = sub.add_parser("status", help="Get device runtime status")
+    sp_status.add_argument("--group", "-g", help="Device group ID (omit for all)")
+
+    sp_set = sub.add_parser("set", help="Set device attributes")
+    sp_set.add_argument("group", help="Device group ID")
+    sp_set.add_argument("settings", nargs="+", help="key=value pairs (e.g. Drive=ON Mode=COOL)")
+
+    sub.add_parser("system", help="Get system configuration")
+    sub.add_parser("mnet-status", help="Get M-NET bus status")
+    sub.add_parser("groups", help="Get control group configuration")
+    sub.add_parser("areas", help="Get area configuration")
+    sub.add_parser("interlocks", help="Get interlock configuration")
+    sub.add_parser("alarms", help="Get alarm configuration")
+    sub.add_parser("functions", help="Get licensed functions")
+    sub.add_parser("schedule", help="Get schedule/season configuration")
+    sub.add_parser("energy", help="Get energy management configuration")
+
+    sp_raw = sub.add_parser("raw", help="Send raw XML request")
+    sp_raw.add_argument("command", choices=["get", "set"], help="Request type")
+    sp_raw.add_argument("xml_body", help="XML body to place inside <DatabaseManager>")
+
+    return p
+
+
+COMMANDS = {
+    "list": cmd_list,
+    "status": cmd_status,
+    "set": cmd_set,
+    "system": cmd_system,
+    "mnet-status": cmd_mnet_status,
+    "groups": cmd_groups,
+    "areas": cmd_areas,
+    "interlocks": cmd_interlocks,
+    "alarms": cmd_alarms,
+    "functions": cmd_functions,
+    "schedule": cmd_schedule,
+    "energy": cmd_energy,
+    "raw": cmd_raw,
+}
+
+
+async def main():
+    parser = build_parser()
+    args = parser.parse_args()
+
+    handler = COMMANDS.get(args.subcommand)
+    if not handler:
+        parser.print_help()
+        sys.exit(1)
+
+    try:
+        result = await handler(args.host, args)
+        print(json.dumps(result, indent=2, ensure_ascii=False))
+    except (ConnectionRefusedError, OSError) as e:
+        print(json.dumps({"error": "connection_refused", "detail": str(e)}), file=sys.stderr)
+        sys.exit(1)
+    except asyncio.TimeoutError:
+        print(json.dumps({"error": "timeout", "detail": f"No response within {args.timeout}s"}), file=sys.stderr)
+        sys.exit(1)
+    except ET.ParseError as e:
+        print(json.dumps({"error": "invalid_xml", "detail": str(e)}), file=sys.stderr)
+        sys.exit(1)
+    except Exception as e:
+        print(json.dumps({"error": str(type(e).__name__), "detail": str(e)}), file=sys.stderr)
+        sys.exit(1)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())

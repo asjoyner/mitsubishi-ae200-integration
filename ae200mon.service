@@ -1,0 +1,14 @@
+[Unit]
+Description=AE-200 Monitoring Daemon
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/home/asjoyner/code/mitsubishi-ae200-integration/venv/bin/python -m ae200mon --config /home/asjoyner/code/mitsubishi-ae200-integration/ae200mon.yaml
+WorkingDirectory=/home/asjoyner/code/mitsubishi-ae200-integration
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

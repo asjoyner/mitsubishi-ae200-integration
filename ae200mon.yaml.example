@@ -1,0 +1,23 @@
+# ae200mon configuration
+metrics_port: 9200
+
+controllers:
+  - host: 192.0.2.10  # replace with your AE-200 controller IP
+    name: geothermal
+    poll_interval: 10
+
+# InfluxDB configuration
+# Supports both v1 and v2. Version is auto-detected:
+#   - If token + org are set: uses InfluxDB v2 client
+#   - Otherwise: uses InfluxDB v1 HTTP line protocol
+influx:
+  enabled: false
+  url: http://localhost:8086
+  # v1 settings:
+  database: ae200
+  username: ""
+  password: ""
+  # v2 settings (uncomment to use v2 instead):
+  # token: ""
+  # org: ""
+  # bucket: ae200

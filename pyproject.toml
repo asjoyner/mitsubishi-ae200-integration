@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ae200lib"
+version = "0.1.0"
+description = "Library and monitoring tools for Mitsubishi AE-200 controllers"
+requires-python = ">=3.11"
+dependencies = [
+    "websockets>=12.0",
+    "prometheus_client>=0.20",
+]
+
+[project.optional-dependencies]
+influx-v2 = ["influxdb-client>=1.38"]
+monitor = [
+    "pyyaml>=6.0",
+    "prometheus_client>=0.20",
+]
+all = [
+    "ae200lib[influx-v2]",
+    "ae200lib[monitor]",
+]
+
+[project.scripts]
+ae200ctl = "ae200ctl:main"
+
+[tool.setuptools]
+packages = ["ae200lib", "ae200mon"]
+
+[tool.setuptools.package-dir]
+ae200lib = "custom_components/mitsubishi_ae200/ae200lib"
+ae200mon = "ae200mon"
