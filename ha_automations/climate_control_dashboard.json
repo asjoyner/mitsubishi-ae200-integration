@@ -1,0 +1,209 @@
+{
+  "views": [
+    {
+      "title": "Climate Control",
+      "sections": [
+        {
+          "type": "grid",
+          "column_span": 4,
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Controls",
+              "heading_style": "title"
+            },
+            {
+              "type": "entities",
+              "entities": [
+                {
+                  "entity": "input_boolean.hvac_climate_control",
+                  "name": "Master Enable"
+                },
+                {
+                  "entity": "input_boolean.hvac_temp_control",
+                  "name": "Temperature Control"
+                }
+              ]
+            },
+            {
+              "type": "entity",
+              "entity": "input_number.hvac_target_temp",
+              "name": "Target Temperature"
+            },
+            {
+              "type": "gauge",
+              "entity": "sensor.indoor_average_humidity",
+              "name": "Indoor Avg Humidity",
+              "min": 20,
+              "max": 70,
+              "severity": {
+                "green": 40,
+                "yellow": 30,
+                "red": 55
+              }
+            },
+            {
+              "type": "entities",
+              "entities": [
+                {
+                  "entity": "switch.humidifier",
+                  "name": "Humidifier"
+                },
+                {
+                  "entity": "switch.dehumidifier_basement",
+                  "name": "Dehumidifier (Basement)"
+                },
+                {
+                  "entity": "switch.dehumidifier_main",
+                  "name": "Dehumidifier (Main)"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "column_span": 2,
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Vault",
+              "heading_style": "title"
+            },
+            {
+              "type": "thermostat",
+              "name": "Vault",
+              "entity": "climate.mitsubishi_ae_200_geothermal_vault",
+              "features": [
+                {"type": "climate-fan-modes", "style": "dropdown"},
+                {"type": "climate-hvac-modes"}
+              ]
+            },
+            {
+              "type": "entities",
+              "entities": [
+                {"entity": "sensor.vault_hvac_average_temperature", "name": "Avg Temp"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "column_span": 2,
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Main Level Left",
+              "heading_style": "title"
+            },
+            {
+              "type": "thermostat",
+              "name": "Main Level Left",
+              "entity": "climate.mitsubishi_ae_200_geothermal_main_level_left",
+              "features": [
+                {"type": "climate-fan-modes", "style": "dropdown"},
+                {"type": "climate-hvac-modes"}
+              ]
+            },
+            {
+              "type": "entities",
+              "entities": [
+                {"entity": "sensor.main_south_hvac_average_temperature", "name": "Avg Temp"},
+                {"entity": "sensor.main_south_hvac_average_humidity", "name": "Avg Humidity"},
+                {"entity": "sensor.main_south_hvac_average_co2", "name": "Avg CO2"},
+                {"entity": "switch.erv_main", "name": "ERV"},
+                {"entity": "switch.dehumidifier_main", "name": "Dehumidifier"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "column_span": 2,
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Upstairs",
+              "heading_style": "title"
+            },
+            {
+              "type": "thermostat",
+              "name": "Upstairs",
+              "entity": "climate.mitsubishi_ae_200_geothermal_upstairs",
+              "features": [
+                {"type": "climate-fan-modes", "style": "dropdown"},
+                {"type": "climate-hvac-modes"}
+              ]
+            },
+            {
+              "type": "entities",
+              "entities": [
+                {"entity": "sensor.upstairs_hvac_average_temperature", "name": "Avg Temp"},
+                {"entity": "sensor.upstairs_hvac_average_humidity", "name": "Avg Humidity"},
+                {"entity": "sensor.upstairs_hvac_average_co2", "name": "Avg CO2"},
+                {"entity": "switch.erv_upstairs", "name": "ERV"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "column_span": 2,
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Downstairs",
+              "heading_style": "title"
+            },
+            {
+              "type": "thermostat",
+              "name": "Downstairs",
+              "entity": "climate.mitsubishi_ae_200_geothermal_downstairs",
+              "features": [
+                {"type": "climate-fan-modes", "style": "dropdown"},
+                {"type": "climate-hvac-modes"}
+              ]
+            },
+            {
+              "type": "entities",
+              "entities": [
+                {"entity": "sensor.basement_hvac_average_temperature", "name": "Avg Temp"},
+                {"entity": "sensor.basement_hvac_average_humidity", "name": "Avg Humidity"},
+                {"entity": "sensor.basement_hvac_average_co2", "name": "Avg CO2"},
+                {"entity": "switch.dehumidifier_basement", "name": "Dehumidifier"}
+              ]
+            }
+          ]
+        },
+        {
+          "type": "grid",
+          "column_span": 2,
+          "cards": [
+            {
+              "type": "heading",
+              "heading": "Master Bedroom",
+              "heading_style": "title"
+            },
+            {
+              "type": "thermostat",
+              "name": "Master Bedroom",
+              "entity": "climate.mitsubishi_ae_200_geothermal_master_bedroom",
+              "features": [
+                {"type": "climate-fan-modes", "style": "dropdown"},
+                {"type": "climate-hvac-modes"}
+              ]
+            },
+            {
+              "type": "entities",
+              "entities": [
+                {"entity": "sensor.main_north_hvac_average_temperature", "name": "Avg Temp"},
+                {"entity": "sensor.main_north_hvac_average_humidity", "name": "Avg Humidity"},
+                {"entity": "sensor.main_north_hvac_average_co2", "name": "Avg CO2"}
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

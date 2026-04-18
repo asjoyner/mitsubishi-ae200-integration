@@ -1,0 +1,425 @@
+# Unified Climate Control Package for Mitsubishi AE-200
+#
+# Manages temperature, CO2 ventilation, and humidity control across all HVAC
+# zones with a single automation. Fan speed is driven by max demand across all
+# subsystems. Graceful degradation: zones without CO2 sensors or
+# humidifier/dehumidifier skip those subsystems automatically.
+#
+# Install: symlink or copy to /var/lib/hass/config/packages/climate_control/
+# See README.md for full setup instructions.
+
+template:
+  - sensor:
+      - name: "Vault HVAC Average Temperature"
+        unique_id: vault_hvac_average_temperature
+        unit_of_measurement: "°F"
+        device_class: temperature
+        state: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_vault', 'current_temperature') | float(72) }}
+
+input_number:
+  hvac_target_temp:
+    name: "HVAC Target Temperature"
+    min: 65
+    max: 80
+    step: 0.5
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer
+    initial: 72
+
+input_boolean:
+  hvac_climate_control:
+    name: "HVAC Climate Control"
+    icon: mdi:thermostat-auto
+    initial: false
+  hvac_temp_control:
+    name: "HVAC Temperature Control"
+    icon: mdi:thermometer-check
+    initial: true
+
+automation:
+  - alias: "Climate: Unified Climate Control"
+    id: unified_climate_control
+    description: >
+      Evaluates every 60s to manage temperature, CO2, and humidity across all
+      HVAC zones. Fan speed = max(temp_demand, co2_demand, humidity_demand).
+    mode: single
+
+    variables:
+      # Fan level ordering for max() comparisons
+      fan_levels:
+        Auto: 0
+        Low: 1
+        High: 2
+        Max: 3
+      fan_names: ["Auto", "Low", "High", "Max"]
+
+      zones:
+        - name: "Vault"
+          label: "hvac-vault"
+          climate: "climate.mitsubishi_ae_200_geothermal_vault"
+          avg_temp: "sensor.vault_hvac_average_temperature"
+          fan_stages: 4
+          erv: null
+          humidifier: null
+          dehumidifier: null
+          dehum_on_threshold: null
+          dehum_off_threshold: null
+        - name: "Main Level Left"
+          label: "hvac-main-south"
+          climate: "climate.mitsubishi_ae_200_geothermal_main_level_left"
+          avg_temp: "sensor.main_south_hvac_average_temperature"
+          fan_stages: 4
+          erv: "switch.erv_main"
+          humidifier: "switch.humidifier"
+          dehumidifier: "switch.dehumidifier_main"
+          dehum_on_threshold: 60
+          dehum_off_threshold: 55
+        - name: "Upstairs"
+          label: "hvac-upstairs"
+          climate: "climate.mitsubishi_ae_200_geothermal_upstairs"
+          avg_temp: "sensor.upstairs_hvac_average_temperature"
+          fan_stages: 4
+          erv: "switch.erv_upstairs"
+          humidifier: "switch.humidifier"
+          dehumidifier: null
+          dehum_on_threshold: null
+          dehum_off_threshold: null
+        - name: "Downstairs"
+          label: "hvac-basement"
+          climate: "climate.mitsubishi_ae_200_geothermal_downstairs"
+          avg_temp: "sensor.basement_hvac_average_temperature"
+          fan_stages: 4
+          erv: null
+          humidifier: "switch.humidifier"
+          dehumidifier: "switch.dehumidifier_basement"
+          dehum_on_threshold: 55
+          dehum_off_threshold: 50
+        - name: "Master Bedroom"
+          label: "hvac-main-north"
+          climate: "climate.mitsubishi_ae_200_geothermal_master_bedroom"
+          avg_temp: "sensor.main_north_hvac_average_temperature"
+          fan_stages: 3
+          erv: null
+          humidifier: "switch.humidifier"
+          dehumidifier: null
+          dehum_on_threshold: null
+          dehum_off_threshold: null
+
+      # Whole-house humidity state (computed once, used by all zones)
+      indoor_avg_humidity: >
+        {{ states('sensor.indoor_average_humidity') | float(50) }}
+
+      any_sensor_over_55: >
+        {% set zone_labels = ['hvac-basement', 'hvac-main-north', 'hvac-main-south', 'hvac-upstairs'] %}
+        {% set ns = namespace(too_high=false) %}
+        {% for label in zone_labels %}
+          {% set ids = label_devices(label) | map('device_entities') | sum(start=[]) | select('match', 'sensor\..*sht4x.*humidity') | list %}
+          {% if expand(ids) | map(attribute='state') | select('is_number') | map('float') | select('gt', 55) | list | count > 0 %}
+            {% set ns.too_high = true %}
+          {% endif %}
+        {% endfor %}
+        {{ ns.too_high }}
+
+      target_f: "{{ states('input_number.hvac_target_temp') | float(72) }}"
+      temp_control_on: "{{ is_state('input_boolean.hvac_temp_control', 'on') }}"
+
+    trigger:
+      - platform: time_pattern
+        minutes: "/1"
+
+    condition:
+      - condition: state
+        entity_id: input_boolean.hvac_climate_control
+        state: "on"
+
+    action:
+      # --- Whole-house humidifier (evaluate once, not per-zone) ---
+      - choose:
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{ indoor_avg_humidity | float < 45 and not (any_sensor_over_55 | bool) }}
+            sequence:
+              - action: switch.turn_on
+                target:
+                  entity_id: switch.humidifier
+          - conditions:
+              - condition: template
+                value_template: >
+                  {{ indoor_avg_humidity | float > 50 or (any_sensor_over_55 | bool) }}
+            sequence:
+              - action: switch.turn_off
+                target:
+                  entity_id: switch.humidifier
+
+      # --- Per-zone control ---
+      - repeat:
+          for_each: "{{ zones }}"
+          sequence:
+            - variables:
+                zone: "{{ repeat.item }}"
+                zone_name: "{{ repeat.item.name }}"
+                zone_label: "{{ repeat.item.label }}"
+                zone_climate: "{{ repeat.item.climate }}"
+                zone_avg_temp_entity: "{{ repeat.item.avg_temp }}"
+                zone_fan_stages: "{{ repeat.item.fan_stages | int }}"
+                zone_erv: "{{ repeat.item.erv }}"
+                zone_dehumidifier: "{{ repeat.item.dehumidifier }}"
+                zone_dehum_on: "{{ repeat.item.dehum_on_threshold }}"
+                zone_dehum_off: "{{ repeat.item.dehum_off_threshold }}"
+
+                # Current zone state
+                zone_avg_temp: >
+                  {{ states(repeat.item.avg_temp) | float(0) }}
+                current_mode: >
+                  {{ state_attr(repeat.item.climate, 'hvac_mode') | default(states(repeat.item.climate), true) }}
+                current_fan: >
+                  {{ state_attr(repeat.item.climate, 'fan_mode') | default('Auto', true) }}
+
+                # --- CO2: max reading from SCD4x sensors in zone ---
+                zone_max_co2: >
+                  {% set ids = label_devices(repeat.item.label) | map('device_entities') | sum(start=[]) | select('match', 'sensor\..*scd4x_co2') | list %}
+                  {% set vals = expand(ids) | map(attribute='state') | select('is_number') | map('float') | list %}
+                  {{ vals | max | default(0) }}
+                zone_has_co2: >
+                  {% set ids = label_devices(repeat.item.label) | map('device_entities') | sum(start=[]) | select('match', 'sensor\..*scd4x_co2') | list %}
+                  {{ ids | count > 0 }}
+
+                # --- Intra-zone temperature spread ---
+                zone_temp_spread: >
+                  {% set ids = label_devices(repeat.item.label) | map('device_entities') | sum(start=[]) | select('match', 'sensor\..*sht4x.*') | list %}
+                  {% set vals = expand(ids) | selectattr('attributes.device_class', 'defined') | selectattr('attributes.device_class', 'eq', 'temperature') | map(attribute='state') | select('is_number') | map('float') | list %}
+                  {% if vals | count > 1 %}
+                    {{ vals | max - vals | min }}
+                  {% else %}
+                    {{ 0 }}
+                  {% endif %}
+
+                # --- Zone humidity average ---
+                zone_avg_humidity: >
+                  {% set ids = label_devices(repeat.item.label) | map('device_entities') | sum(start=[]) | select('match', 'sensor\..*sht4x.*') | list %}
+                  {% set vals = expand(ids) | selectattr('attributes.device_class', 'defined') | selectattr('attributes.device_class', 'eq', 'humidity') | map(attribute='state') | select('is_number') | map('float') | list %}
+                  {% if vals | count > 0 %}
+                    {{ (vals | sum / vals | count) | round(1) }}
+                  {% else %}
+                    {{ 50 }}
+                  {% endif %}
+
+                zone_any_humidity_under_40: >
+                  {% set ids = label_devices(repeat.item.label) | map('device_entities') | sum(start=[]) | select('match', 'sensor\..*sht4x.*humidity') | list %}
+                  {{ expand(ids) | map(attribute='state') | select('is_number') | map('float') | select('lt', 40) | list | count > 0 }}
+
+                # ===== TEMPERATURE DEMAND =====
+                # Setpoint delta (how far avg is from target)
+                setpoint_delta: >
+                  {{ (zone_avg_temp | float - target_f | float) | abs }}
+
+                # Temperature score = max(setpoint_delta, intra_zone_spread)
+                temp_score: >
+                  {% set delta = (zone_avg_temp | float - target_f | float) | abs %}
+                  {% set spread = zone_temp_spread | float %}
+                  {{ [delta, spread] | max }}
+
+                # Temperature fan demand (numeric level)
+                temp_fan_level: >
+                  {% set score = temp_score | float %}
+                  {% set stages = zone_fan_stages | int %}
+                  {% if not (temp_control_on | bool) %}
+                    {{ 0 }}
+                  {% elif stages == 4 %}
+                    {% if score < 1 %}{{ 0 }}
+                    {% elif score < 2 %}{{ 1 }}
+                    {% elif score < 3 %}{{ 2 }}
+                    {% else %}{{ 3 }}
+                    {% endif %}
+                  {% elif stages == 3 %}
+                    {% if score < 1 %}{{ 0 }}
+                    {% elif score < 2.5 %}{{ 2 }}
+                    {% else %}{{ 3 }}
+                    {% endif %}
+                  {% else %}
+                    {{ 0 }}
+                  {% endif %}
+
+                # Desired HVAC mode
+                desired_mode: >
+                  {% set avg = zone_avg_temp | float %}
+                  {% set tgt = target_f | float %}
+                  {% if not (temp_control_on | bool) %}
+                    heat_cool
+                  {% elif avg < tgt - 1 %}
+                    heat
+                  {% elif avg > tgt + 1 %}
+                    cool
+                  {% else %}
+                    {{ current_mode }}
+                  {% endif %}
+
+                # Desired setpoint in °C (AE-200 native unit)
+                desired_setpoint_c: >
+                  {% set tgt = target_f | float %}
+                  {% set avg = zone_avg_temp | float %}
+                  {% if not (temp_control_on | bool) %}
+                    {{ 0 }}
+                  {% elif avg < tgt - 1 %}
+                    {% set sp_f = tgt + 2 %}
+                    {% set sp_c = (sp_f - 32) * 5 / 9 %}
+                    {{ [[sp_c, 16] | max, 30] | min }}
+                  {% elif avg > tgt + 1 %}
+                    {% set sp_f = tgt - 2 %}
+                    {% set sp_c = (sp_f - 32) * 5 / 9 %}
+                    {{ [[sp_c, 16] | max, 30] | min }}
+                  {% else %}
+                    {{ 0 }}
+                  {% endif %}
+
+                # Desired setpoints for heat_cool mode (temp control OFF fallback)
+                desired_setpoint_high_c: >
+                  {% set sp_f = target_f | float + 2 %}
+                  {{ [[(sp_f - 32) * 5 / 9, 16] | max, 30] | min }}
+                desired_setpoint_low_c: >
+                  {% set sp_f = target_f | float - 2 %}
+                  {{ [[(sp_f - 32) * 5 / 9, 16] | max, 30] | min }}
+
+                # ===== CO2 DEMAND =====
+                co2_fan_level: >
+                  {% set co2 = zone_max_co2 | float %}
+                  {% set has_co2 = zone_has_co2 | bool(false) %}
+                  {% if not has_co2 %}
+                    {{ 0 }}
+                  {% elif co2 > 800 %}
+                    {{ 3 }}
+                  {% elif co2 > 600 %}
+                    {{ 2 }}
+                  {% else %}
+                    {{ 0 }}
+                  {% endif %}
+
+                # Desired ERV state
+                desired_erv: >
+                  {% if zone_erv in [None, 'None', 'null', ''] %}
+                    none
+                  {% elif zone_max_co2 | float > 800 %}
+                    on
+                  {% elif zone_max_co2 | float < 600 %}
+                    off
+                  {% else %}
+                    {{ states(zone_erv) | default('off') }}
+                  {% endif %}
+
+                # ===== HUMIDITY DEMAND =====
+                humidity_fan_level: >
+                  {% set dehum = repeat.item.dehumidifier %}
+                  {% set hum = repeat.item.humidifier %}
+                  {% set dehum_active = dehum not in [None, 'None', 'null', ''] and is_state(dehum, 'on') %}
+                  {% set hum_active = hum not in [None, 'None', 'null', ''] and is_state(hum, 'on') %}
+                  {% if dehum_active or hum_active %}
+                    {{ 1 }}
+                  {% else %}
+                    {{ 0 }}
+                  {% endif %}
+
+                # ===== FINAL FAN SPEED =====
+                final_fan_level: >
+                  {{ [temp_fan_level | int, co2_fan_level | int, humidity_fan_level | int] | max }}
+                desired_fan: >
+                  {{ fan_names[([temp_fan_level | int, co2_fan_level | int, humidity_fan_level | int] | max)] }}
+
+            # --- Send mode command if changed ---
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ desired_mode != current_mode }}
+                  sequence:
+                    - action: climate.set_hvac_mode
+                      target:
+                        entity_id: "{{ zone_climate }}"
+                      data:
+                        hvac_mode: "{{ desired_mode }}"
+
+            # --- Send setpoint command ---
+            - choose:
+                # Temp control ON and outside dead band: single setpoint
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ (temp_control_on | bool) and desired_setpoint_c | float > 0 }}
+                  sequence:
+                    - action: climate.set_temperature
+                      target:
+                        entity_id: "{{ zone_climate }}"
+                      data:
+                        temperature: "{{ desired_setpoint_c | float | round(1) }}"
+                # Temp control OFF: set dual setpoints for heat_cool mode
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ not (temp_control_on | bool) }}
+                  sequence:
+                    - action: climate.set_temperature
+                      target:
+                        entity_id: "{{ zone_climate }}"
+                      data:
+                        target_temp_high: "{{ desired_setpoint_high_c | float | round(1) }}"
+                        target_temp_low: "{{ desired_setpoint_low_c | float | round(1) }}"
+
+            # --- Send fan speed command if changed ---
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ desired_fan != current_fan }}
+                  sequence:
+                    - action: climate.set_fan_mode
+                      target:
+                        entity_id: "{{ zone_climate }}"
+                      data:
+                        fan_mode: "{{ desired_fan }}"
+
+            # --- ERV control ---
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ desired_erv == 'on' and not is_state(zone_erv, 'on') }}
+                  sequence:
+                    - action: switch.turn_on
+                      target:
+                        entity_id: "{{ zone_erv }}"
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ desired_erv == 'off' and is_state(zone_erv, 'on') }}
+                  sequence:
+                    - action: switch.turn_off
+                      target:
+                        entity_id: "{{ zone_erv }}"
+
+            # --- Dehumidifier control (per-zone) ---
+            - choose:
+                # Turn ON: zone avg > threshold and no sensor too dry
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {% set dehum = zone_dehumidifier %}
+                        {{ dehum not in [None, 'None', 'null', '']
+                           and zone_avg_humidity | float > zone_dehum_on | float
+                           and not (zone_any_humidity_under_40 | bool) }}
+                  sequence:
+                    - action: switch.turn_on
+                      target:
+                        entity_id: "{{ zone_dehumidifier }}"
+                # Turn OFF: zone avg < off_threshold or any sensor too dry
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {% set dehum = zone_dehumidifier %}
+                        {{ dehum not in [None, 'None', 'null', '']
+                           and (zone_avg_humidity | float < zone_dehum_off | float
+                                or (zone_any_humidity_under_40 | bool)) }}
+                  sequence:
+                    - action: switch.turn_off
+                      target:
+                        entity_id: "{{ zone_dehumidifier }}"
