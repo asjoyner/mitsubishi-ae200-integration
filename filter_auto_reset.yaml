@@ -10,11 +10,16 @@
 #   - EAC electrostatic cells (all except Vault): clean every 3 months (~21 cycles)
 #
 # Zone mapping:
-#   Group 1 = Vault (mesh only, limit 7)
+#   Group 1 = Vault (mesh only, limit 21)
 #   Group 2 = Main South (mesh + EAC, limit 21)
 #   Group 3 = Upstairs (mesh + EAC, limit 21)
 #   Group 4 = Downstairs (mesh + EAC, limit 21)
 #   Group 5 = Master Bedroom (mesh + EAC, limit 21)
+#
+# Vault was originally limit 7 (~30 days) because mesh-only is
+# typically cleaned monthly. Bumped to 21 to align with the other
+# zones; revisit if observed dust load on the vault mesh is too high
+# for ~90 days between cleanings.
 
 counter:
   filter_reset_vault:
@@ -49,7 +54,7 @@ input_number:
     min: 1
     max: 50
     step: 1
-    initial: 7
+    initial: 21
     mode: box
     icon: mdi:air-filter
   filter_reset_limit_main_south:
