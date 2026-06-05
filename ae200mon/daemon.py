@@ -5,7 +5,7 @@ import logging
 import signal
 import threading
 import time
-from http.server import HTTPServer, BaseHTTPRequestHandler
+from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 from prometheus_client import generate_latest, CONTENT_TYPE_LATEST
 
@@ -101,7 +101,11 @@ async def run(config: MonitorConfig) -> None:
 
     # Start HTTP server (metrics + /quitquitquit)
     handler_class = _make_handler(stop, loop)
-    httpd = HTTPServer(("", config.metrics_port), handler_class)
+    # Localhost-only: Prometheus is colocated; binding 0.0.0.0 exposes the
+    # handler to Internet scanners, and a slow/half-closed client can wedge
+    # the accept loop. ThreadingHTTPServer further insulates against one
+    # stuck request blocking the rest.
+    httpd = ThreadingHTTPServer(("127.0.0.1", config.metrics_port), handler_class)
     http_thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     http_thread.start()
     _LOGGER.info("HTTP server started on port %d (/metrics, /quitquitquit)", config.metrics_port)
