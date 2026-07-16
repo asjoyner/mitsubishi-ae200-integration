@@ -145,6 +145,9 @@ automation:
             times (~{{ (states('counter.filter_reset_vault') | int * 100 / 24) | round(0) }} days).
             Time to clean the mesh pre-filter. Next filter sign will persist until manually reset.
 
+
+            [Open the Filter Cleaning dashboard](/dashboard-filters) to mark it cleaned.
+
   - id: filter_auto_reset_main_south
     alias: "Filter Auto-Reset: Main South"
     description: "Auto-reset filter sign on Main South (group 2) up to the configured limit"
@@ -180,6 +183,9 @@ automation:
                   message: >-
                     Main South mesh pre-filter has been running for ~1 month.
                     Consider cleaning the mesh filter. EAC cells due at ~3 months.
+
+
+                    [Open the Filter Cleaning dashboard](/dashboard-filters) to mark it cleaned.
           - conditions:
               - condition: template
                 value_template: >-
@@ -193,6 +199,9 @@ automation:
                     Main South filters have been auto-reset {{ states('counter.filter_reset_main_south') }}
                     times (~{{ (states('counter.filter_reset_main_south') | int * 100 / 24) | round(0) }} days).
                     Time to clean mesh pre-filter and EAC collection cells. Next filter sign will persist.
+
+
+                    [Open the Filter Cleaning dashboard](/dashboard-filters) to mark it cleaned.
 
   - id: filter_auto_reset_upstairs
     alias: "Filter Auto-Reset: Upstairs"
@@ -229,6 +238,9 @@ automation:
                   message: >-
                     Upstairs mesh pre-filter has been running for ~1 month.
                     Consider cleaning the mesh filter. EAC cells due at ~3 months.
+
+
+                    [Open the Filter Cleaning dashboard](/dashboard-filters) to mark it cleaned.
           - conditions:
               - condition: template
                 value_template: >-
@@ -242,6 +254,9 @@ automation:
                     Upstairs filters have been auto-reset {{ states('counter.filter_reset_upstairs') }}
                     times (~{{ (states('counter.filter_reset_upstairs') | int * 100 / 24) | round(0) }} days).
                     Time to clean mesh pre-filter and EAC collection cells. Next filter sign will persist.
+
+
+                    [Open the Filter Cleaning dashboard](/dashboard-filters) to mark it cleaned.
 
   - id: filter_auto_reset_downstairs
     alias: "Filter Auto-Reset: Downstairs"
@@ -278,6 +293,9 @@ automation:
                   message: >-
                     Downstairs mesh pre-filter has been running for ~1 month.
                     Consider cleaning the mesh filter. EAC cells due at ~3 months.
+
+
+                    [Open the Filter Cleaning dashboard](/dashboard-filters) to mark it cleaned.
           - conditions:
               - condition: template
                 value_template: >-
@@ -291,6 +309,9 @@ automation:
                     Downstairs filters have been auto-reset {{ states('counter.filter_reset_downstairs') }}
                     times (~{{ (states('counter.filter_reset_downstairs') | int * 100 / 24) | round(0) }} days).
                     Time to clean mesh pre-filter and EAC collection cells. Next filter sign will persist.
+
+
+                    [Open the Filter Cleaning dashboard](/dashboard-filters) to mark it cleaned.
 
   - id: filter_auto_reset_master_bedroom
     alias: "Filter Auto-Reset: Master Bedroom"
@@ -327,6 +348,9 @@ automation:
                   message: >-
                     Master Bedroom mesh pre-filter has been running for ~1 month.
                     Consider cleaning the mesh filter. EAC cells due at ~3 months.
+
+
+                    [Open the Filter Cleaning dashboard](/dashboard-filters) to mark it cleaned.
           - conditions:
               - condition: template
                 value_template: >-
@@ -340,6 +364,9 @@ automation:
                     Master Bedroom filters have been auto-reset {{ states('counter.filter_reset_master_bedroom') }}
                     times (~{{ (states('counter.filter_reset_master_bedroom') | int * 100 / 24) | round(0) }} days).
                     Time to clean mesh pre-filter and EAC collection cells. Next filter sign will persist.
+
+
+                    [Open the Filter Cleaning dashboard](/dashboard-filters) to mark it cleaned.
 
   # --- "I cleaned the filters" automations: zero counter + reset sign ---
 
