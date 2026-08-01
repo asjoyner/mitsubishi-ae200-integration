@@ -41,10 +41,15 @@ class AE200Controller:
         await self.poll_all()
         return list(self._devices.values())
 
-    async def poll_all(self) -> None:
-        """Single WebSocket call to fetch all devices at once."""
+    async def poll_all(self) -> bool:
+        """Single WebSocket call to fetch all devices at once.
+
+        Returns True only if the controller answered and devices were updated.
+        Callers that only want the side effects can ignore the result, but
+        anything reporting freshness must not treat an attempt as a success.
+        """
         if not self._devices:
-            return
+            return False
         ids = list(self._devices.keys())
         try:
             raw = await ws_request(self.host, mnet_query(ids), timeout=self.timeout)
@@ -55,6 +60,7 @@ class AE200Controller:
                 if gid and gid in self._devices:
                     self._devices[gid].update(attrs)
                     self._devices[gid].last_successful_poll = now
+            return True
         except (ConnectionRefusedError, OSError) as err:
             _LOGGER.warning("Connection refused to %s: %s", self.host, err)
             self._mark_all_error("connection_refused")
@@ -67,6 +73,7 @@ class AE200Controller:
         except Exception as err:
             _LOGGER.warning("Unexpected error polling %s: %s", self.host, err)
             self._mark_all_error(str(err))
+        return False
 
     async def poll_device(self, group_id: str) -> DeviceState | None:
         """Single-device refresh."""

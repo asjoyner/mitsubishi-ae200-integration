@@ -68,15 +68,25 @@ async def poll_loop(
     _LOGGER.info("Starting poll loop for %s (%s) every %.0fs",
                  config.name, config.host, config.poll_interval)
 
+    # Publish the series up front so a daemon that has NEVER had a successful
+    # poll still exports a sample. Otherwise a restart while the AE-200 is
+    # unreachable leaves AE200PollStale with no series to evaluate, and the
+    # outage stays invisible for exactly the reason we are fixing here.
+    ae200_last_poll_timestamp_seconds.labels(config.name).set(0)
+
     while True:
         start = time.monotonic()
-        await controller.poll_all()
+        ok = await controller.poll_all()
         duration = time.monotonic() - start
 
         devices = list(controller.devices.values())
         update_metrics(config.name, devices)
         ae200_poll_duration_seconds.labels(config.name).set(duration)
-        ae200_last_poll_timestamp_seconds.labels(config.name).set(time.time())
+        # Only stamp on an actual success. Stamping every attempt made this
+        # gauge permanently fresh, so AE200PollStale could never fire -- the
+        # AE-200 was unreachable for hours and this still read ~25s old.
+        if ok:
+            ae200_last_poll_timestamp_seconds.labels(config.name).set(time.time())
 
         # Track errors
         for device in devices:
