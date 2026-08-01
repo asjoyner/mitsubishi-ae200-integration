@@ -83,6 +83,19 @@ async def poll_loop(
 
     while True:
         start = time.monotonic()
+
+        # Discovery may not have succeeded at startup (AE-200 unreachable), and
+        # poll_all is a no-op with no devices. Retry here so the daemon heals
+        # itself once the controller answers again, without a manual restart.
+        if not controller.devices:
+            try:
+                await controller.discover_devices()
+                if controller.devices:
+                    _LOGGER.info("Discovered %d devices on %s",
+                                 len(controller.devices), config.name)
+            except Exception as err:
+                _LOGGER.warning("Discovery retry failed for %s: %s", config.name, err)
+
         ok = await controller.poll_all()
         duration = time.monotonic() - start
 
@@ -146,8 +159,19 @@ async def run(config: MonitorConfig) -> None:
     for cc in config.controllers:
         controller = AE200Controller(cc.host)
         _LOGGER.info("Discovering devices on %s (%s)...", cc.name, cc.host)
-        await controller.discover_devices()
-        _LOGGER.info("Found %d devices on %s", len(controller.devices), cc.name)
+        try:
+            await controller.discover_devices()
+        except Exception as err:
+            # Startup discovery must not be fatal. This daemon's whole job is to
+            # report that the AE-200 is unreachable, and it cannot do that if it
+            # dies before serving a single metric. Previously an unreachable
+            # controller crashed run() here, so the unit crash-looped and the
+            # staleness alert had no exporter to fire from. poll_loop retries.
+            _LOGGER.warning(
+                "Initial discovery failed for %s (%s): %s -- serving metrics and "
+                "retrying in the poll loop", cc.name, cc.host, err)
+        else:
+            _LOGGER.info("Found %d devices on %s", len(controller.devices), cc.name)
         tasks.append(asyncio.create_task(poll_loop(controller, cc, influx_writer)))
 
     await stop.wait()
