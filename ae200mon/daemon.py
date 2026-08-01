@@ -72,7 +72,14 @@ async def poll_loop(
     # poll still exports a sample. Otherwise a restart while the AE-200 is
     # unreachable leaves AE200PollStale with no series to evaluate, and the
     # outage stays invisible for exactly the reason we are fixing here.
-    ae200_last_poll_timestamp_seconds.labels(config.name).set(0)
+    #
+    # Seed it with the start time, not 0: seeding 0 makes the gauge instantly
+    # older than the 5m staleness threshold, so every restart would fire
+    # AE200PollStale ~2m later -- including during a deploy, whose health check
+    # would then roll the release back. Starting the clock now gives a fresh
+    # daemon one staleness window of grace. It is never advanced again except
+    # by a genuine success, so a real outage still goes stale on schedule.
+    ae200_last_poll_timestamp_seconds.labels(config.name).set(time.time())
 
     while True:
         start = time.monotonic()
