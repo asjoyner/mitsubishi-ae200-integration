@@ -37,7 +37,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     # Register the controller as a device
     device_registry = dr.async_get(hass)
-    device_registry.async_get_or_create(
+    hub = device_registry.async_get_or_create(
         config_entry_id=entry.entry_id,
         identifiers={(DOMAIN, entry.entry_id)},
         name=f"Mitsubishi AE200 Controller ({entry.data[CONF_CONTROLLER_ID]})",
@@ -45,6 +45,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         model="AE200 Controller",
         configuration_url=f"http://{ip_address}",
     )
+    hass.data[DOMAIN][entry.entry_id]["hub_device_id"] = hub.id
 
     async def handle_filter_reset(call: ServiceCall) -> None:
         """Reset the filter sign for a specific group."""

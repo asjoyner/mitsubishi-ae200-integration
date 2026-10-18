@@ -15,6 +15,7 @@ from .ae200lib.controller import AE200Controller
 from .ae200lib.device import DeviceState
 
 from .const import DOMAIN, CONF_CONTROLLER_ID
+from .device import via_controller
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,7 +51,7 @@ class AE200FilterSignSensor(BinarySensorEntity):
             name=self._device.name,
             manufacturer="Mitsubishi Electric",
             model="HVAC Unit",
-            via_device=(DOMAIN, self._entry_id),
+            **via_controller(self.hass, self._entry_id),
         )
 
     @property
@@ -109,7 +110,7 @@ class AE200ErrorSignSensor(BinarySensorEntity):
             name=self._device.name,
             manufacturer="Mitsubishi Electric",
             model="HVAC Unit",
-            via_device=(DOMAIN, self._entry_id),
+            **via_controller(self.hass, self._entry_id),
         )
 
     @property

@@ -11,6 +11,8 @@ from homeassistant.const import (
     ATTR_TEMPERATURE,
 )
 from homeassistant.helpers.entity import generate_entity_id, DeviceInfo
+
+from .device import via_controller
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -155,7 +157,7 @@ class AE200Climate(ClimateEntity):
             name=self._device.name,
             manufacturer="Mitsubishi Electric",
             model=model,
-            via_device=(DOMAIN, self._entry_id),
+            **via_controller(self.hass, self._entry_id),
         )
 
     @property
