@@ -1,11 +1,15 @@
 """The Mitsubishi AE200 integration."""
+import asyncio
 import logging
+import xml.etree.ElementTree as ET
 
 import voluptuous as vol
+import websockets.exceptions
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_IP_ADDRESS, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.exceptions import ConfigEntryNotReady
 from homeassistant.helpers import device_registry as dr
 
 from .ae200lib.controller import AE200Controller
@@ -28,7 +32,23 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
 
     ip_address = entry.data[CONF_IP_ADDRESS]
     controller = AE200Controller(ip_address)
-    await controller.discover_devices()
+    # The AE-200 answers ping, HTTP and the WebSocket upgrade for ~10 min
+    # after a power cut before it answers XML. Raising ConfigEntryNotReady
+    # makes HA retry setup with backoff; any other exception leaves the
+    # entry in setup_error and every entity unavailable until a manual reload.
+    try:
+        devices = await controller.discover_devices()
+    except (
+        OSError,
+        asyncio.TimeoutError,
+        websockets.exceptions.WebSocketException,
+        ET.ParseError,
+    ) as err:
+        raise ConfigEntryNotReady(
+            f"AE-200 at {ip_address} not answering: {err!r}"
+        ) from err
+    if not devices:
+        raise ConfigEntryNotReady(f"AE-200 at {ip_address} reported no groups")
 
     hass.data[DOMAIN][entry.entry_id] = {
         "controller": controller,
