@@ -159,6 +159,67 @@ template:
             {% endif %}
           raw_rh_lower_bound: "{{ states('sensor.indoor_average_humidity') }}"
 
+# SMOOTHED control inputs -- these, not the raw return-air sensors, drive the
+# automation.
+#
+# The AE-200 inlet reading arrives as whole °F (it is 0.5 °C native, rounded on
+# the way through HA), and Main Level Left's is genuinely noisy: stdev 1.9 °F
+# against 0.5-0.6 °F for the other zones, with spikes to +4 °F. A 1 °F dead band
+# on a signal like that sits on the boundary and rattles. Measured 2026-11-08,
+# in the hour after the dead band started writing the target: Main Level Left
+# changed setpoint 7 times and Downstairs 9 times, cycling 70/72/74, while the
+# three quiet zones changed once each. The two that chattered are exactly the
+# two noisy ones.
+#
+# A 15 min moving average cuts the noise about 4x (15 samples at the 60 s poll)
+# and restores sub-degree resolution, so the comparisons below act on a trend
+# instead of on quantisation. The lag is irrelevant against a house thermal
+# time constant measured in hours.
+#
+# These go unknown until the filter has seen a sample after a restart. That is
+# safe: zone_temp_valid rejects a non-number and no writes are sent.
+sensor:
+  - platform: filter
+    name: "Vault HVAC Return Air Smoothed"
+    unique_id: vault_hvac_return_air_smoothed
+    entity_id: sensor.vault_hvac_return_air_temperature
+    filters:
+      - filter: time_simple_moving_average
+        window_size: "00:15:00"
+        precision: 2
+  - platform: filter
+    name: "Main South HVAC Return Air Smoothed"
+    unique_id: main_south_hvac_return_air_smoothed
+    entity_id: sensor.main_south_hvac_return_air_temperature
+    filters:
+      - filter: time_simple_moving_average
+        window_size: "00:15:00"
+        precision: 2
+  - platform: filter
+    name: "Upstairs HVAC Return Air Smoothed"
+    unique_id: upstairs_hvac_return_air_smoothed
+    entity_id: sensor.upstairs_hvac_return_air_temperature
+    filters:
+      - filter: time_simple_moving_average
+        window_size: "00:15:00"
+        precision: 2
+  - platform: filter
+    name: "Basement HVAC Return Air Smoothed"
+    unique_id: basement_hvac_return_air_smoothed
+    entity_id: sensor.basement_hvac_return_air_temperature
+    filters:
+      - filter: time_simple_moving_average
+        window_size: "00:15:00"
+        precision: 2
+  - platform: filter
+    name: "Main North HVAC Return Air Smoothed"
+    unique_id: main_north_hvac_return_air_smoothed
+    entity_id: sensor.main_north_hvac_return_air_temperature
+    filters:
+      - filter: time_simple_moving_average
+        window_size: "00:15:00"
+        precision: 2
+
 input_number:
   hvac_target_temp:
     name: "HVAC Target Temperature"
@@ -170,14 +231,18 @@ input_number:
     initial: 72
 
 input_boolean:
+  # No `initial:` on either of these, so they restore their last state across a
+  # restart. They used to be pinned (climate_control false, temp_control true),
+  # which meant every HA restart silently switched the whole loop OFF and left
+  # the house uncontrolled with nothing to say so -- the master gate was found
+  # off since 2026-04-28 that way. Safety comes from the availability guards and
+  # zone_temp_valid, not from forgetting the operator's last decision.
   hvac_climate_control:
     name: "HVAC Climate Control"
     icon: mdi:thermostat-auto
-    initial: false
   hvac_temp_control:
     name: "HVAC Temperature Control"
     icon: mdi:thermometer-check
-    initial: true
 
 automation:
   - alias: "Climate: Unified Climate Control"
@@ -200,7 +265,7 @@ automation:
         - name: "Vault"
           label: "hvac-vault"
           climate: "climate.mitsubishi_ae_200_geothermal_vault"
-          avg_temp: "sensor.vault_hvac_return_air_temperature"
+          avg_temp: "sensor.vault_hvac_return_air_smoothed"
           fan_stages: 4
           erv: null
           humidifier: null
@@ -210,7 +275,7 @@ automation:
         - name: "Main Level Left"
           label: "hvac-main-south"
           climate: "climate.mitsubishi_ae_200_geothermal_main_level_left"
-          avg_temp: "sensor.main_south_hvac_return_air_temperature"
+          avg_temp: "sensor.main_south_hvac_return_air_smoothed"
           fan_stages: 4
           erv: "switch.erv_main"
           humidifier: "switch.humidifier"
@@ -220,7 +285,7 @@ automation:
         - name: "Upstairs"
           label: "hvac-upstairs"
           climate: "climate.mitsubishi_ae_200_geothermal_upstairs"
-          avg_temp: "sensor.upstairs_hvac_return_air_temperature"
+          avg_temp: "sensor.upstairs_hvac_return_air_smoothed"
           fan_stages: 4
           erv: "switch.erv_upstairs"
           humidifier: "switch.humidifier"
@@ -230,7 +295,7 @@ automation:
         - name: "Downstairs"
           label: "hvac-basement"
           climate: "climate.mitsubishi_ae_200_geothermal_downstairs"
-          avg_temp: "sensor.basement_hvac_return_air_temperature"
+          avg_temp: "sensor.basement_hvac_return_air_smoothed"
           fan_stages: 4
           erv: null
           humidifier: "switch.humidifier"
@@ -240,7 +305,7 @@ automation:
         - name: "Master Bedroom"
           label: "hvac-main-north"
           climate: "climate.mitsubishi_ae_200_geothermal_master_bedroom"
-          avg_temp: "sensor.main_north_hvac_return_air_temperature"
+          avg_temp: "sensor.main_north_hvac_return_air_smoothed"
           fan_stages: 3
           erv: null
           humidifier: "switch.humidifier"
@@ -465,16 +530,30 @@ automation:
                 # the target once it arrives. 0 now means only "temp control is
                 # off, leave the setpoints alone", which is what the write block
                 # below guards on.
+                #
+                # HYSTERESIS. Engage the overshoot at +/-1 F past target,
+                # release it when the zone actually reaches target, and do not
+                # re-engage until +/-1 F is crossed again. The engage and
+                # release points have to differ or the setpoint rattles on the
+                # boundary, which is what snapping straight back to target did:
+                # 7-9 setpoint changes an hour on the two noisy zones.
+                #
+                # `current_setpoint` is the state that says whether we are
+                # already engaged, compared with a 0.5 F tolerance because the
+                # AE-200 stores 0.5 C steps and rounds what we write.
                 desired_setpoint_f: >
                   {% set tgt = target_f | float %}
                   {% set avg = zone_avg_temp | float %}
                   {% set lo = state_attr(repeat.item.climate, 'min_temp') | float(61) %}
                   {% set hi = state_attr(repeat.item.climate, 'max_temp') | float(86) %}
+                  {% set sp = current_setpoint | float(0) %}
+                  {% set heating = (sp - (tgt + 2)) | abs < 0.5 %}
+                  {% set cooling = (sp - (tgt - 2)) | abs < 0.5 %}
                   {% if not (temp_control_on | bool) %}
                     {{ 0 }}
-                  {% elif avg < tgt - 1 %}
+                  {% elif avg < tgt - 1 or (heating and avg < tgt) %}
                     {{ [[tgt + 2, lo] | max, hi] | min }}
-                  {% elif avg > tgt + 1 %}
+                  {% elif avg > tgt + 1 or (cooling and avg > tgt) %}
                     {{ [[tgt - 2, lo] | max, hi] | min }}
                   {% else %}
                     {{ [[tgt, lo] | max, hi] | min }}
@@ -555,7 +634,7 @@ automation:
                       value_template: >
                         {{ (temp_control_on | bool) and (zone_temp_valid | bool)
                            and desired_setpoint_f | float > 0
-                           and (desired_setpoint_f | float | round(1)) != (current_setpoint | float | round(1)) }}
+                           and ((desired_setpoint_f | float) - (current_setpoint | float(0))) | abs >= 0.5 }}
                   sequence:
                     - action: climate.set_temperature
                       target:
