@@ -449,6 +449,22 @@ automation:
                 #
                 # Clamped to the entity's own advertised limits rather than
                 # hardcoded numbers (AE-200 reports 61-86 F).
+                # Inside the dead band the setpoint returns to the target,
+                # it does NOT stop being written. Writing 0 (= "no write") here
+                # latched the overshoot: on 2026-11-08 the Vault's return air
+                # touched 70 F for one 60 s cycle, took mode=heat / setpoint=74,
+                # and then sat at 70-73 F for four hours with nothing to walk 74
+                # back. Because the inlet reads in whole °F and the comparisons
+                # are strict, the only exit was for the room to actually reach
+                # 74 and flip to cool/70 -- a 4 F peak-to-peak swing, and four
+                # zones holding cool/70 against one holding heat/74 while every
+                # zone was already within 1 F of target.
+                #
+                # The +/-2 overshoot is still there for the approach, so the VRF
+                # is driven hard while the zone is away from target and then told
+                # the target once it arrives. 0 now means only "temp control is
+                # off, leave the setpoints alone", which is what the write block
+                # below guards on.
                 desired_setpoint_f: >
                   {% set tgt = target_f | float %}
                   {% set avg = zone_avg_temp | float %}
@@ -461,7 +477,7 @@ automation:
                   {% elif avg > tgt + 1 %}
                     {{ [[tgt - 2, lo] | max, hi] | min }}
                   {% else %}
-                    {{ 0 }}
+                    {{ [[tgt, lo] | max, hi] | min }}
                   {% endif %}
 
                 # Desired setpoints for heat_cool mode, also in °F.
