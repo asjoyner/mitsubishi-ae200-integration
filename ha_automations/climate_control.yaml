@@ -8,14 +8,134 @@
 # Install: symlink or copy to /var/lib/hass/config/packages/climate_control/
 # See README.md for full setup instructions.
 
+# Control temperature = the AE-200 return-air (inlet) reading for each zone.
+#
+# This replaced the per-room SHT45 averages on 2026-11-08. Those sensors sit
+# next to the FP2 presence sensors, which heat them: measured the same day they
+# read +3.8 F (Master Bedroom) to +9.4 F (Downstairs) above return air. With a
+# 72 F target and a 1 F dead band, four of the five zones would have commanded
+# cooling the moment control was enabled. The FP2 heating is still present in
+# the revised sensor design, so this is not a "wait for the new boards" fix.
+#
+# These deliberately go UNAVAILABLE rather than falling back to a number when
+# the AE-200 stops reporting. All five zones now depend on one upstream source,
+# so a silent default would drive the whole house off a bad reading; the
+# automation gates on zone_temp_valid instead.
 template:
   - sensor:
-      - name: "Vault HVAC Average Temperature"
-        unique_id: vault_hvac_average_temperature
+      - name: "Vault HVAC Return Air Temperature"
+        unique_id: vault_hvac_return_air_temperature
         unit_of_measurement: "°F"
         device_class: temperature
+        availability: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_vault', 'current_temperature') is not none }}
         state: >
-          {{ state_attr('climate.mitsubishi_ae_200_geothermal_vault', 'current_temperature') | float(72) }}
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_vault', 'current_temperature') | float }}
+      - name: "Main South HVAC Return Air Temperature"
+        unique_id: main_south_hvac_return_air_temperature
+        unit_of_measurement: "°F"
+        device_class: temperature
+        availability: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_main_level_left', 'current_temperature') is not none }}
+        state: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_main_level_left', 'current_temperature') | float }}
+      - name: "Upstairs HVAC Return Air Temperature"
+        unique_id: upstairs_hvac_return_air_temperature
+        unit_of_measurement: "°F"
+        device_class: temperature
+        availability: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_upstairs', 'current_temperature') is not none }}
+        state: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_upstairs', 'current_temperature') | float }}
+      - name: "Basement HVAC Return Air Temperature"
+        unique_id: basement_hvac_return_air_temperature
+        unit_of_measurement: "°F"
+        device_class: temperature
+        availability: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_downstairs', 'current_temperature') is not none }}
+        state: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_downstairs', 'current_temperature') | float }}
+      - name: "Main North HVAC Return Air Temperature"
+        unique_id: main_north_hvac_return_air_temperature
+        unit_of_measurement: "°F"
+        device_class: temperature
+        availability: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_master_bedroom', 'current_temperature') is not none }}
+        state: >
+          {{ state_attr('climate.mitsubishi_ae_200_geothermal_master_bedroom', 'current_temperature') | float }}
+
+# Control humidity = the room RH, re-referenced to return-air temperature.
+#
+# The SHT45s are temperature compensated, but that compensation is to the
+# sensor's OWN die temperature: each one truthfully reports the RH of the air
+# touching a part the FP2 holds above room temperature. Warming air at constant
+# moisture lowers its RH, so a heated sensor makes the house look drier than it
+# is. Vapour pressure is the invariant, so RH re-references by the ratio of
+# saturation vapour pressures (Magnus):
+#
+#   RH_room = RH_sensor * es(T_sensor) / es(T_return)
+#
+# Measured 2026-11-08: 38.1 % reported vs 47.4 % actual -- a 9.3 point error
+# that straddles the 45 % humidifier-ON threshold exactly. Uncorrected,
+# enabling humidity control would have run the humidifier on an already-47 %
+# house in November, toward window condensation. Same root cause and same
+# remedy as the return-air temperature change above.
+      - name: "Indoor Average Humidity Return Air Referenced"
+        unique_id: indoor_average_humidity_return_air_referenced
+        unit_of_measurement: "%"
+        device_class: humidity
+        availability: >
+          {% set room = ['sensor.basement_hvac_average_temperature',
+                         'sensor.main_north_hvac_average_temperature',
+                         'sensor.main_south_hvac_average_temperature',
+                         'sensor.upstairs_hvac_average_temperature']
+                        | map('states') | select('is_number') | list %}
+          {% set ret = ['sensor.vault_hvac_return_air_temperature',
+                        'sensor.main_south_hvac_return_air_temperature',
+                        'sensor.upstairs_hvac_return_air_temperature',
+                        'sensor.basement_hvac_return_air_temperature',
+                        'sensor.main_north_hvac_return_air_temperature']
+                       | map('states') | select('is_number') | list %}
+          {{ room | count > 0 and ret | count > 0
+             and states('sensor.indoor_average_humidity') | is_number }}
+        state: >
+          {% set a = 17.625 %}
+          {% set b = 243.04 %}
+          {% set room = ['sensor.basement_hvac_average_temperature',
+                         'sensor.main_north_hvac_average_temperature',
+                         'sensor.main_south_hvac_average_temperature',
+                         'sensor.upstairs_hvac_average_temperature']
+                        | map('states') | select('is_number') | map('float') | list %}
+          {% set ret = ['sensor.vault_hvac_return_air_temperature',
+                        'sensor.main_south_hvac_return_air_temperature',
+                        'sensor.upstairs_hvac_return_air_temperature',
+                        'sensor.basement_hvac_return_air_temperature',
+                        'sensor.main_north_hvac_return_air_temperature']
+                       | map('states') | select('is_number') | map('float') | list %}
+          {% set ts = ((room | sum / room | count) - 32) * 5 / 9 %}
+          {% set tr = ((ret | sum / ret | count) - 32) * 5 / 9 %}
+          {% set ratio = (e ** (a * ts / (b + ts))) / (e ** (a * tr / (b + tr))) %}
+          {% set rh = states('sensor.indoor_average_humidity') | float * ratio %}
+          {{ [[rh, 100] | min, 0] | max | round(1) }}
+        attributes:
+          correction_ratio: >
+            {% set a = 17.625 %}
+            {% set b = 243.04 %}
+            {% set room = ['sensor.basement_hvac_average_temperature',
+                           'sensor.main_north_hvac_average_temperature',
+                           'sensor.main_south_hvac_average_temperature',
+                           'sensor.upstairs_hvac_average_temperature']
+                          | map('states') | select('is_number') | map('float') | list %}
+            {% set ret = ['sensor.vault_hvac_return_air_temperature',
+                          'sensor.main_south_hvac_return_air_temperature',
+                          'sensor.upstairs_hvac_return_air_temperature',
+                          'sensor.basement_hvac_return_air_temperature',
+                          'sensor.main_north_hvac_return_air_temperature']
+                         | map('states') | select('is_number') | map('float') | list %}
+            {% set ts = ((room | sum / room | count) - 32) * 5 / 9 %}
+            {% set tr = ((ret | sum / ret | count) - 32) * 5 / 9 %}
+            {{ ((e ** (a * ts / (b + ts))) / (e ** (a * tr / (b + tr)))) | round(4) }}
+          raw_humidity: "{{ states('sensor.indoor_average_humidity') }}"
 
 input_number:
   hvac_target_temp:
@@ -58,7 +178,8 @@ automation:
         - name: "Vault"
           label: "hvac-vault"
           climate: "climate.mitsubishi_ae_200_geothermal_vault"
-          avg_temp: "sensor.vault_hvac_average_temperature"
+          avg_temp: "sensor.vault_hvac_return_air_temperature"
+          room_temp: null
           fan_stages: 4
           erv: null
           humidifier: null
@@ -68,7 +189,8 @@ automation:
         - name: "Main Level Left"
           label: "hvac-main-south"
           climate: "climate.mitsubishi_ae_200_geothermal_main_level_left"
-          avg_temp: "sensor.main_south_hvac_average_temperature"
+          avg_temp: "sensor.main_south_hvac_return_air_temperature"
+          room_temp: "sensor.main_south_hvac_average_temperature"
           fan_stages: 4
           erv: "switch.erv_main"
           humidifier: "switch.humidifier"
@@ -78,7 +200,8 @@ automation:
         - name: "Upstairs"
           label: "hvac-upstairs"
           climate: "climate.mitsubishi_ae_200_geothermal_upstairs"
-          avg_temp: "sensor.upstairs_hvac_average_temperature"
+          avg_temp: "sensor.upstairs_hvac_return_air_temperature"
+          room_temp: "sensor.upstairs_hvac_average_temperature"
           fan_stages: 4
           erv: "switch.erv_upstairs"
           humidifier: "switch.humidifier"
@@ -88,7 +211,8 @@ automation:
         - name: "Downstairs"
           label: "hvac-basement"
           climate: "climate.mitsubishi_ae_200_geothermal_downstairs"
-          avg_temp: "sensor.basement_hvac_average_temperature"
+          avg_temp: "sensor.basement_hvac_return_air_temperature"
+          room_temp: "sensor.basement_hvac_average_temperature"
           fan_stages: 4
           erv: null
           humidifier: "switch.humidifier"
@@ -98,7 +222,8 @@ automation:
         - name: "Master Bedroom"
           label: "hvac-main-north"
           climate: "climate.mitsubishi_ae_200_geothermal_master_bedroom"
-          avg_temp: "sensor.main_north_hvac_average_temperature"
+          avg_temp: "sensor.main_north_hvac_return_air_temperature"
+          room_temp: "sensor.main_north_hvac_average_temperature"
           fan_stages: 3
           erv: null
           humidifier: "switch.humidifier"
@@ -108,14 +233,20 @@ automation:
 
       # Whole-house humidity state (computed once, used by all zones)
       indoor_avg_humidity: >
-        {{ states('sensor.indoor_average_humidity') | float(50) }}
+        {{ states('sensor.indoor_average_humidity_return_air_referenced') | float(50) }}
 
+      # Per-sensor damp-room interlock. The sensors read RH at their own heated
+      # temperature, so a true 55 % room shows up as 55 / ratio on the raw
+      # sensor. Correcting the threshold is equivalent to correcting every
+      # reading, and keeps this a one-pass comparison.
       any_sensor_over_55: >
+        {% set ratio = state_attr('sensor.indoor_average_humidity_return_air_referenced', 'correction_ratio') | float(1) %}
+        {% set thresh = 55 / ([ratio, 0.1] | max) %}
         {% set zone_labels = ['hvac-basement', 'hvac-main-north', 'hvac-main-south', 'hvac-upstairs'] %}
         {% set ns = namespace(too_high=false) %}
         {% for label in zone_labels %}
           {% set ids = label_devices(label) | map('device_entities') | sum(start=[]) | select('match', 'sensor\..*sht4x.*humidity') | list %}
-          {% if expand(ids) | map(attribute='state') | select('is_number') | map('float') | select('gt', 55) | list | count > 0 %}
+          {% if expand(ids) | map(attribute='state') | select('is_number') | map('float') | select('gt', thresh) | list | count > 0 %}
             {% set ns.too_high = true %}
           {% endif %}
         {% endfor %}
@@ -172,10 +303,23 @@ automation:
                 # Current zone state
                 zone_avg_temp: >
                   {{ states(repeat.item.avg_temp) | float(0) }}
+                # Never act on a missing or implausible reading. states() of an
+                # unavailable sensor is the STRING "unavailable", and the float(0)
+                # above would turn that into 0 F -- which reads as "freezing" and
+                # would command full heat on every zone at once, since all five
+                # now share the AE-200 as their source.
+                zone_temp_valid: >
+                  {% set v = states(repeat.item.avg_temp) %}
+                  {{ v is not none
+                     and v not in ['unknown', 'unavailable', 'none', '']
+                     and v | is_number
+                     and (v | float) > 40 and (v | float) < 100 }}
                 current_mode: >
                   {{ state_attr(repeat.item.climate, 'hvac_mode') | default(states(repeat.item.climate), true) }}
                 current_fan: >
                   {{ state_attr(repeat.item.climate, 'fan_mode') | default('Auto', true) }}
+                current_setpoint: >
+                  {{ state_attr(repeat.item.climate, 'temperature') | float(0) }}
 
                 # --- CO2: max reading from SCD4x sensors in zone ---
                 zone_max_co2: >
@@ -196,36 +340,74 @@ automation:
                     {{ 0 }}
                   {% endif %}
 
-                # --- Zone humidity average ---
+                # --- Zone humidity, referenced to this zone's return air ---
+                # The zone's own offset, not the house average: it ranges from
+                # +3.8 F (Master Bedroom) to +9.4 F (Downstairs), and Downstairs
+                # is one of the two zones with a dehumidifier. Falls back to the
+                # whole-house ratio when a zone has no room-average sensor.
+                zone_humidity_ratio: >
+                  {% set a = 17.625 %}
+                  {% set b = 243.04 %}
+                  {% set rt = repeat.item.room_temp %}
+                  {% set house = state_attr('sensor.indoor_average_humidity_return_air_referenced', 'correction_ratio') | float(1) %}
+                  {% if rt in [None, 'None', 'null', ''] or not states(rt) | is_number
+                        or not states(repeat.item.avg_temp) | is_number %}
+                    {{ house }}
+                  {% else %}
+                    {% set ts = (states(rt) | float - 32) * 5 / 9 %}
+                    {% set tr = (states(repeat.item.avg_temp) | float - 32) * 5 / 9 %}
+                    {{ ((e ** (a * ts / (b + ts))) / (e ** (a * tr / (b + tr)))) | round(4) }}
+                  {% endif %}
+
                 zone_avg_humidity: >
                   {% set ids = label_devices(repeat.item.label) | map('device_entities') | sum(start=[]) | select('match', 'sensor\..*sht4x.*') | list %}
                   {% set vals = expand(ids) | selectattr('attributes.device_class', 'defined') | selectattr('attributes.device_class', 'eq', 'humidity') | map(attribute='state') | select('is_number') | map('float') | list %}
                   {% if vals | count > 0 %}
-                    {{ (vals | sum / vals | count) | round(1) }}
+                    {{ [((vals | sum / vals | count) * (zone_humidity_ratio | float(1))), 100] | min | round(1) }}
                   {% else %}
                     {{ 50 }}
                   {% endif %}
 
+                # A true 40 % room reads 40 / ratio on the heated sensor, so the
+                # threshold moves instead of every reading.
                 zone_any_humidity_under_40: >
+                  {% set thresh = 40 / ([(zone_humidity_ratio | float(1)), 0.1] | max) %}
                   {% set ids = label_devices(repeat.item.label) | map('device_entities') | sum(start=[]) | select('match', 'sensor\..*sht4x.*humidity') | list %}
-                  {{ expand(ids) | map(attribute='state') | select('is_number') | map('float') | select('lt', 40) | list | count > 0 }}
+                  {{ expand(ids) | map(attribute='state') | select('is_number') | map('float') | select('lt', thresh) | list | count > 0 }}
 
                 # ===== TEMPERATURE DEMAND =====
                 # Setpoint delta (how far avg is from target)
                 setpoint_delta: >
                   {{ (zone_avg_temp | float - target_f | float) | abs }}
 
-                # Temperature score = max(setpoint_delta, intra_zone_spread)
+                # Temperature score = setpoint delta only.
+                #
+                # This used to be max(setpoint_delta, zone_temp_spread), to run
+                # the fan harder when rooms within a zone disagreed. That is a
+                # sound idea but zone_temp_spread is not usable in absolute °F:
+                # it is measured between SHT45s that the FP2 sensors heat by
+                # DIFFERENT amounts, so most of the spread is bias variance
+                # rather than real air temperature difference. Measured
+                # 2026-11-08 with every zone within 2 °F of target, the spread
+                # term was 4.5-7.4 °F and pinned all four instrumented zones to
+                # Max fan continuously; Vault escaped only because it has no
+                # SHT45s. Master Bedroom showed 69.3-76.7 °F against 70 °F
+                # return air -- a 7.4 °F "spread" over air that is not stratified
+                # that much.
+                #
+                # zone_temp_spread is still computed below for dashboards and
+                # diagnostics. To put it back into fan demand, first establish a
+                # per-sensor offset against return air, or relocate the FP2s so
+                # the SHT45s read room air (the revised board has landed only in
+                # the master closet so far).
                 temp_score: >
-                  {% set delta = (zone_avg_temp | float - target_f | float) | abs %}
-                  {% set spread = zone_temp_spread | float %}
-                  {{ [delta, spread] | max }}
+                  {{ (zone_avg_temp | float - target_f | float) | abs }}
 
                 # Temperature fan demand (numeric level)
                 temp_fan_level: >
                   {% set score = temp_score | float %}
                   {% set stages = zone_fan_stages | int %}
-                  {% if not (temp_control_on | bool) %}
+                  {% if not (temp_control_on | bool) or not (zone_temp_valid | bool) %}
                     {{ 0 }}
                   {% elif stages == 4 %}
                     {% if score < 1 %}{{ 0 }}
@@ -256,31 +438,47 @@ automation:
                     {{ current_mode }}
                   {% endif %}
 
-                # Desired setpoint in °C (AE-200 native unit)
-                desired_setpoint_c: >
+                # Desired setpoint in °F -- HA's configured unit, NOT Celsius.
+                #
+                # climate.set_temperature takes the value in HA's unit system
+                # (°F here). The mitsubishi_ae200 integration is native Celsius
+                # and HA converts on the way in, so passing Celsius made HA
+                # convert a second time: 74 F -> 23.3 -> -4.8 C, which the
+                # integration rejected as outside its 16-30 C range. Every
+                # setpoint write failed that way while the unitless mode and
+                # fan writes went through, which is why the automation looked
+                # half-alive. Fixed 2026-11-08.
+                #
+                # °F also matches current_setpoint below, which reads the
+                # climate entity's `temperature` attribute (HA-converted to °F);
+                # comparing Celsius against that never matched, so a doomed
+                # write was retried every 60 s.
+                #
+                # Clamped to the entity's own advertised limits rather than
+                # hardcoded numbers (AE-200 reports 61-86 F).
+                desired_setpoint_f: >
                   {% set tgt = target_f | float %}
                   {% set avg = zone_avg_temp | float %}
+                  {% set lo = state_attr(repeat.item.climate, 'min_temp') | float(61) %}
+                  {% set hi = state_attr(repeat.item.climate, 'max_temp') | float(86) %}
                   {% if not (temp_control_on | bool) %}
                     {{ 0 }}
                   {% elif avg < tgt - 1 %}
-                    {% set sp_f = tgt + 2 %}
-                    {% set sp_c = (sp_f - 32) * 5 / 9 %}
-                    {{ [[sp_c, 16] | max, 30] | min }}
+                    {{ [[tgt + 2, lo] | max, hi] | min }}
                   {% elif avg > tgt + 1 %}
-                    {% set sp_f = tgt - 2 %}
-                    {% set sp_c = (sp_f - 32) * 5 / 9 %}
-                    {{ [[sp_c, 16] | max, 30] | min }}
+                    {{ [[tgt - 2, lo] | max, hi] | min }}
                   {% else %}
                     {{ 0 }}
                   {% endif %}
 
-                # Desired setpoints for heat_cool mode (temp control OFF fallback)
-                desired_setpoint_high_c: >
-                  {% set sp_f = target_f | float + 2 %}
-                  {{ [[(sp_f - 32) * 5 / 9, 16] | max, 30] | min }}
-                desired_setpoint_low_c: >
-                  {% set sp_f = target_f | float - 2 %}
-                  {{ [[(sp_f - 32) * 5 / 9, 16] | max, 30] | min }}
+                # Desired setpoints for heat_cool mode, also in °F.
+                # Currently unreferenced; kept in °F so they are not a trap.
+                desired_setpoint_high_f: >
+                  {% set hi = state_attr(repeat.item.climate, 'max_temp') | float(86) %}
+                  {{ [target_f | float + 2, hi] | min }}
+                desired_setpoint_low_f: >
+                  {% set lo = state_attr(repeat.item.climate, 'min_temp') | float(61) %}
+                  {{ [target_f | float - 2, lo] | max }}
 
                 # ===== CO2 DEMAND =====
                 co2_fan_level: >
@@ -326,12 +524,13 @@ automation:
                 desired_fan: >
                   {{ fan_names[([temp_fan_level | int, co2_fan_level | int, humidity_fan_level | int] | max)] }}
 
-            # --- Send mode command if changed ---
+            # --- Send mode command if changed (only when temp control is active) ---
             - choose:
                 - conditions:
                     - condition: template
                       value_template: >
-                        {{ desired_mode != current_mode }}
+                        {{ (temp_control_on | bool) and (zone_temp_valid | bool)
+                           and desired_mode != current_mode }}
                   sequence:
                     - action: climate.set_hvac_mode
                       target:
@@ -345,25 +544,16 @@ automation:
                 - conditions:
                     - condition: template
                       value_template: >
-                        {{ (temp_control_on | bool) and desired_setpoint_c | float > 0 }}
+                        {{ (temp_control_on | bool) and (zone_temp_valid | bool)
+                           and desired_setpoint_f | float > 0
+                           and (desired_setpoint_f | float | round(1)) != (current_setpoint | float | round(1)) }}
                   sequence:
                     - action: climate.set_temperature
                       target:
                         entity_id: "{{ zone_climate }}"
                       data:
-                        temperature: "{{ desired_setpoint_c | float | round(1) }}"
-                # Temp control OFF: set dual setpoints for heat_cool mode
-                - conditions:
-                    - condition: template
-                      value_template: >
-                        {{ not (temp_control_on | bool) }}
-                  sequence:
-                    - action: climate.set_temperature
-                      target:
-                        entity_id: "{{ zone_climate }}"
-                      data:
-                        target_temp_high: "{{ desired_setpoint_high_c | float | round(1) }}"
-                        target_temp_low: "{{ desired_setpoint_low_c | float | round(1) }}"
+                        temperature: "{{ desired_setpoint_f | float | round(1) }}"
+                # Temp control OFF: leave setpoints alone for manual control
 
             # --- Send fan speed command if changed ---
             - choose:
