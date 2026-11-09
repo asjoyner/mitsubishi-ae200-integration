@@ -228,7 +228,12 @@ input_number:
     step: 0.5
     unit_of_measurement: "°F"
     icon: mdi:thermometer
-    initial: 72
+    # No `initial:`. It used to be 72, which HA re-applies on EVERY restart,
+    # silently discarding whatever the operator had set -- the same trap that
+    # was removed from the two control booleans. Verified safe before removing:
+    # .storage/core.restore_state holds a value for this entity, so it restores
+    # the last setting rather than coming up at `min:` (65), which is the
+    # failure direction a YAML input_number takes with nothing stored.
 
 input_boolean:
   # No `initial:` on either of these, so they restore their last state across a
