@@ -1,0 +1,19 @@
+#!/bin/bash
+# Periodic check: is a climate zone parked in the wrong mode still moving its
+# room? Cron runs this; it prints a report to the log and publishes metrics to
+# the claude-owned node_exporter textfile dir, so the answer is in Prometheus
+# long term and not only in a log nobody reads.
+#
+# Sources the HA credentials the same way ~/bin/ha does, so the analyser itself
+# only ever reads the environment.
+set -u
+CRED_FILE="${HOME}/.config/ha-debug/credentials"
+if [ ! -f "$CRED_FILE" ]; then
+    echo "Error: Credential file not found: $CRED_FILE" >&2
+    exit 1
+fi
+set -a
+. "$CRED_FILE"
+set +a
+exec /home/claude/code/mitsubishi-ae200-integration/ha_automations/response_curve.py \
+    "${1:-24}" --prom /var/lib/prometheus/node-exporter-claude/hvac_control.prom
