@@ -482,18 +482,74 @@ automation:
                     {{ 0 }}
                   {% endif %}
 
-                # Desired HVAC mode
+                # Desired HVAC mode.
+                #
+                # The mode band (+/-2) is deliberately WIDER than the setpoint
+                # overshoot (+/-1, below). It has to be: the AE-200 drives the
+                # room to whatever setpoint we hand it, so if the commanded
+                # extreme sits outside the mode band, every approach ends by
+                # crossing the opposite mode threshold and the loop is
+                # GUARANTEED to flip heat <-> cool forever.
+                #
+                # That is exactly what happened on 2026-11-08 with a +/-1 mode
+                # band and a +/-2 overshoot. Main Level Left: cool/69.8 pulled
+                # the room to 70.7 (below 71.0) -> heat/74.3 -> heated to 73.4
+                # (above 73.0) -> cool/69.8, four flips in 73 min and three
+                # AE200ZoneOutOfComfortBand pages. Downstairs swung 9.2 F in 3 h
+                # and flipped ten times. The 15 min smoothing cut the setpoint
+                # chatter but could not fix this: the flips are not noise, they
+                # are the loop tracking a target it was told to overshoot.
+                #
+                # So: 1 F of margin between the commanded extreme and the mode
+                # threshold, and heat <-> cool additionally held for 60 min
+                # after the last mode change, as a backstop for whatever this
+                # reasoning has missed.
+                #
+                # `mode_dwell_ok` uses the climate entity's own last_changed,
+                # which for a climate entity IS the last mode change (state is
+                # the hvac mode; attribute updates only bump last_updated). It
+                # needs no helper and it also sees changes made from the AE-200
+                # panel or the HA UI. After an HA restart last_changed is the
+                # restart time, so mode changes are held for the first hour;
+                # that is the safe direction and the smoothed inputs are
+                # unavailable for the first 15 min anyway.
+                #
+                # While a flip is held, the setpoint template below still writes
+                # for the direction the room actually needs, which lands on the
+                # wrong side of the held mode -- heat with a setpoint under the
+                # room, or cool with one over it. That thermo-offs the indoor
+                # unit, so a held zone coasts rather than running backwards.
+                # The 60 min dwell must not become the failure itself. While a
+                # flip is held the zone coasts, so a load that keeps pushing it
+                # would be ignored for up to an hour -- and at a 72 F target,
+                # 30 min anywhere above 73 F is an AE200ZoneOutOfComfortBand
+                # page. Past 3 F from target the excursion is larger than
+                # anything this loop's own overshoot can cause, so it is real
+                # and the dwell gives way. That bounds a coast at target +/-3
+                # instead of leaving it open-ended.
+                mode_dwell_ok: >
+                  {% set st = states[repeat.item.climate] %}
+                  {% set lc = st.last_changed if st is not none else none %}
+                  {{ lc is none or (now() - lc).total_seconds() >= 3600 }}
                 desired_mode: >
                   {% set avg = zone_avg_temp | float %}
                   {% set tgt = target_f | float %}
+                  {% set cur = current_mode %}
+                  {% set flip = cur in ['heat', 'cool'] %}
+                  {% set may = mode_dwell_ok | bool or not flip
+                               or avg < tgt - 3 or avg > tgt + 3 %}
                   {% if not (temp_control_on | bool) %}
                     heat_cool
-                  {% elif avg < tgt - 1 %}
+                  {% elif avg < tgt - 2 and may %}
                     heat
-                  {% elif avg > tgt + 1 %}
+                  {% elif avg > tgt + 2 and may %}
                     cool
+                  {% elif flip %}
+                    {{ cur }}
+                  {% elif cur == 'heat_cool' %}
+                    {{ 'heat' if avg < tgt else 'cool' }}
                   {% else %}
-                    {{ current_mode }}
+                    {{ cur }}
                   {% endif %}
 
                 # Desired setpoint in °F -- HA's configured unit, NOT Celsius.
@@ -525,11 +581,24 @@ automation:
                 # zones holding cool/70 against one holding heat/74 while every
                 # zone was already within 1 F of target.
                 #
-                # The +/-2 overshoot is still there for the approach, so the VRF
+                # The overshoot is still there for the approach, so the VRF
                 # is driven hard while the zone is away from target and then told
                 # the target once it arrives. 0 now means only "temp control is
                 # off, leave the setpoints alone", which is what the write block
                 # below guards on.
+                #
+                # It is +/-1, not +/-2. The size of this number is not a comfort
+                # or an aggression setting: it is the furthest the equipment will
+                # be asked to carry the room past target, and it MUST stay
+                # strictly inside the +/-2 mode band above or the loop oscillates
+                # by construction (see desired_mode). Anyone widening it has to
+                # widen the mode band first. Approach aggression lives in
+                # temp_fan_level, which already scales with the distance to
+                # target; it does not need to live here as well.
+                #
+                # +/-1 also keeps the room inside the 65-73 F band that
+                # AE200ZoneOutOfComfortBand pages on: at a 72 F target the
+                # commanded extremes are 71 and 73, where +/-2 commanded 74.
                 #
                 # HYSTERESIS. Engage the overshoot at +/-1 F past target,
                 # release it when the zone actually reaches target, and do not
@@ -547,14 +616,14 @@ automation:
                   {% set lo = state_attr(repeat.item.climate, 'min_temp') | float(61) %}
                   {% set hi = state_attr(repeat.item.climate, 'max_temp') | float(86) %}
                   {% set sp = current_setpoint | float(0) %}
-                  {% set heating = (sp - (tgt + 2)) | abs < 0.5 %}
-                  {% set cooling = (sp - (tgt - 2)) | abs < 0.5 %}
+                  {% set heating = (sp - (tgt + 1)) | abs < 0.5 %}
+                  {% set cooling = (sp - (tgt - 1)) | abs < 0.5 %}
                   {% if not (temp_control_on | bool) %}
                     {{ 0 }}
                   {% elif avg < tgt - 1 or (heating and avg < tgt) %}
-                    {{ [[tgt + 2, lo] | max, hi] | min }}
+                    {{ [[tgt + 1, lo] | max, hi] | min }}
                   {% elif avg > tgt + 1 or (cooling and avg > tgt) %}
-                    {{ [[tgt - 2, lo] | max, hi] | min }}
+                    {{ [[tgt - 1, lo] | max, hi] | min }}
                   {% else %}
                     {{ [[tgt, lo] | max, hi] | min }}
                   {% endif %}
