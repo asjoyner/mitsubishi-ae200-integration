@@ -311,7 +311,6 @@ template:
             {% set a = 1 - (e ** (-dt / 600)) %}
             {{ (prev + a * ((src | float) - prev)) | round(2) }}
           {% endif %}
-        precision: 2
 
 input_number:
   hvac_target_temp:
