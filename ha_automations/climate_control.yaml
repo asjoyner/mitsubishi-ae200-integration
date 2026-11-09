@@ -171,53 +171,146 @@ template:
 # three quiet zones changed once each. The two that chattered are exactly the
 # two noisy ones.
 #
-# A 15 min moving average cuts the noise about 4x (15 samples at the 60 s poll)
-# and restores sub-degree resolution, so the comparisons below act on a trend
-# instead of on quantisation. The lag is irrelevant against a house thermal
-# time constant measured in hours.
+# Smoothing cuts that noise and restores sub-degree resolution, so the
+# comparisons below act on a trend instead of on quantisation. The lag is
+# irrelevant against a house thermal time constant measured in hours.
 #
-# These go unknown until the filter has seen a sample after a restart. That is
-# safe: zone_temp_valid rejects a non-number and no writes are sent.
-sensor:
-  - platform: filter
-    name: "Vault HVAC Return Air Smoothed"
-    unique_id: vault_hvac_return_air_smoothed
-    entity_id: sensor.vault_hvac_return_air_temperature
-    filters:
-      - filter: time_simple_moving_average
-        window_size: "00:15:00"
-        precision: 2
-  - platform: filter
-    name: "Main South HVAC Return Air Smoothed"
-    unique_id: main_south_hvac_return_air_smoothed
-    entity_id: sensor.main_south_hvac_return_air_temperature
-    filters:
-      - filter: time_simple_moving_average
-        window_size: "00:15:00"
-        precision: 2
-  - platform: filter
-    name: "Upstairs HVAC Return Air Smoothed"
-    unique_id: upstairs_hvac_return_air_smoothed
-    entity_id: sensor.upstairs_hvac_return_air_temperature
-    filters:
-      - filter: time_simple_moving_average
-        window_size: "00:15:00"
-        precision: 2
-  - platform: filter
-    name: "Basement HVAC Return Air Smoothed"
-    unique_id: basement_hvac_return_air_smoothed
-    entity_id: sensor.basement_hvac_return_air_temperature
-    filters:
-      - filter: time_simple_moving_average
-        window_size: "00:15:00"
-        precision: 2
-  - platform: filter
-    name: "Main North HVAC Return Air Smoothed"
-    unique_id: main_north_hvac_return_air_smoothed
-    entity_id: sensor.main_north_hvac_return_air_temperature
-    filters:
-      - filter: time_simple_moving_average
-        window_size: "00:15:00"
+# WHY THIS IS A TIME-DRIVEN EMA AND NOT THE `filter` PLATFORM
+#
+# It used to be five `platform: filter` time_simple_moving_average sensors.
+# That was broken in a way that is invisible until it bites, and on
+# 2026-11-09 it cost an AE200ZoneOutOfComfortBand page on UPSTAIRS.
+#
+# The filter platform recomputes ONLY from async_track_state_change_event on
+# its source (homeassistant/components/filter/sensor.py: _filter_state is
+# reached only from _update_filter_sensor_state). It has no timer. The source
+# here is whole °F, so when a room holds still the source stops emitting
+# state_changed -- and the filter output FREEZES at whatever partial average it
+# last computed, for as long as the room is steady. There is no upper bound on
+# how long, and no way to wake it from the source side: re-rendering a template
+# sensor to an unchanged value fires EVENT_STATE_REPORTED, not
+# EVENT_STATE_CHANGED (core.py async_set_internal returns early on
+# same_state and same_attr), so the filter never hears it.
+#
+# Measured on UPSTAIRS, 2026-11-09:
+#   12:54:19  source 71 -> smoothed 71.07
+#   12:58:19  source 72    (smoothed does not move)
+#   ... 3 h 28 min with NO update at all ...
+#   16:26:20  source 73 -> smoothed 72.00
+# Prometheus (0.5 °C native, finer) shows the room actually climbing
+# 71.6 -> 72.5 across that gap. So the control input read 71.07 while the room
+# was 72.5: stale by ~1.4 °F, in the one condition where you most need it right.
+#
+# Consequences, all of them real: desired_mode could not see the room cross
+# target+2, so UPSTAIRS stayed parked in `heat` until 16:38 and paged at
+# 73.4 °F; zone_acting, desired_setpoint_f and summer_dhw_gating's
+# heating_demand were all reading the same stale number.
+#
+# The exponential moving average below is driven by a time_pattern, so it
+# recomputes every 60 s whether or not the source moved, and converges on the
+# source instead of freezing short of it. tau = 600 s (10 min) -- a little
+# faster than the old nominal 15 min window, deliberately, because the fault we
+# just fixed was the loop reacting LATE.
+#
+# dt is measured from this.last_updated rather than assumed to be 60 s, and
+# clamped to 900 s, so a restart or a long HA outage re-acquires in one step
+# instead of crawling back from a stale value.
+#
+# These go unknown whenever the source is not a number, including until the
+# first sample after a restart. That is safe and deliberate: zone_temp_valid
+# rejects a non-number and no writes are sent. The next cycle reseeds straight
+# from the source.
+  - trigger:
+      - platform: time_pattern
+        minutes: "/1"
+      - platform: homeassistant
+        event: start
+    sensor:
+      - name: "Vault HVAC Control Temp"
+        unique_id: vault_hvac_control_temp
+        unit_of_measurement: "°F"
+        device_class: temperature
+        state_class: measurement
+        state: >
+          {% set src = states('sensor.vault_hvac_return_air_temperature') %}
+          {% set prev = this.state | float(-999) %}
+          {% if not (src | is_number) %}
+            unknown
+          {% elif prev < -900 %}
+            {{ src | float | round(2) }}
+          {% else %}
+            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set a = 1 - (e ** (-dt / 600)) %}
+            {{ (prev + a * ((src | float) - prev)) | round(2) }}
+          {% endif %}
+      - name: "Main South HVAC Control Temp"
+        unique_id: main_south_hvac_control_temp
+        unit_of_measurement: "°F"
+        device_class: temperature
+        state_class: measurement
+        state: >
+          {% set src = states('sensor.main_south_hvac_return_air_temperature') %}
+          {% set prev = this.state | float(-999) %}
+          {% if not (src | is_number) %}
+            unknown
+          {% elif prev < -900 %}
+            {{ src | float | round(2) }}
+          {% else %}
+            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set a = 1 - (e ** (-dt / 600)) %}
+            {{ (prev + a * ((src | float) - prev)) | round(2) }}
+          {% endif %}
+      - name: "Upstairs HVAC Control Temp"
+        unique_id: upstairs_hvac_control_temp
+        unit_of_measurement: "°F"
+        device_class: temperature
+        state_class: measurement
+        state: >
+          {% set src = states('sensor.upstairs_hvac_return_air_temperature') %}
+          {% set prev = this.state | float(-999) %}
+          {% if not (src | is_number) %}
+            unknown
+          {% elif prev < -900 %}
+            {{ src | float | round(2) }}
+          {% else %}
+            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set a = 1 - (e ** (-dt / 600)) %}
+            {{ (prev + a * ((src | float) - prev)) | round(2) }}
+          {% endif %}
+      - name: "Basement HVAC Control Temp"
+        unique_id: basement_hvac_control_temp
+        unit_of_measurement: "°F"
+        device_class: temperature
+        state_class: measurement
+        state: >
+          {% set src = states('sensor.basement_hvac_return_air_temperature') %}
+          {% set prev = this.state | float(-999) %}
+          {% if not (src | is_number) %}
+            unknown
+          {% elif prev < -900 %}
+            {{ src | float | round(2) }}
+          {% else %}
+            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set a = 1 - (e ** (-dt / 600)) %}
+            {{ (prev + a * ((src | float) - prev)) | round(2) }}
+          {% endif %}
+      - name: "Main North HVAC Control Temp"
+        unique_id: main_north_hvac_control_temp
+        unit_of_measurement: "°F"
+        device_class: temperature
+        state_class: measurement
+        state: >
+          {% set src = states('sensor.main_north_hvac_return_air_temperature') %}
+          {% set prev = this.state | float(-999) %}
+          {% if not (src | is_number) %}
+            unknown
+          {% elif prev < -900 %}
+            {{ src | float | round(2) }}
+          {% else %}
+            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set a = 1 - (e ** (-dt / 600)) %}
+            {{ (prev + a * ((src | float) - prev)) | round(2) }}
+          {% endif %}
         precision: 2
 
 input_number:
@@ -270,7 +363,7 @@ automation:
         - name: "Vault"
           label: "hvac-vault"
           climate: "climate.mitsubishi_ae_200_geothermal_vault"
-          avg_temp: "sensor.vault_hvac_return_air_smoothed"
+          avg_temp: "sensor.vault_hvac_control_temp"
           fan_stages: 4
           erv: null
           humidifier: null
@@ -280,7 +373,7 @@ automation:
         - name: "Main Level Left"
           label: "hvac-main-south"
           climate: "climate.mitsubishi_ae_200_geothermal_main_level_left"
-          avg_temp: "sensor.main_south_hvac_return_air_smoothed"
+          avg_temp: "sensor.main_south_hvac_control_temp"
           fan_stages: 4
           erv: "switch.erv_main"
           humidifier: "switch.humidifier"
@@ -290,7 +383,7 @@ automation:
         - name: "Upstairs"
           label: "hvac-upstairs"
           climate: "climate.mitsubishi_ae_200_geothermal_upstairs"
-          avg_temp: "sensor.upstairs_hvac_return_air_smoothed"
+          avg_temp: "sensor.upstairs_hvac_control_temp"
           fan_stages: 4
           erv: "switch.erv_upstairs"
           humidifier: "switch.humidifier"
@@ -300,7 +393,7 @@ automation:
         - name: "Downstairs"
           label: "hvac-basement"
           climate: "climate.mitsubishi_ae_200_geothermal_downstairs"
-          avg_temp: "sensor.basement_hvac_return_air_smoothed"
+          avg_temp: "sensor.basement_hvac_control_temp"
           fan_stages: 4
           erv: null
           humidifier: "switch.humidifier"
@@ -310,7 +403,7 @@ automation:
         - name: "Master Bedroom"
           label: "hvac-main-north"
           climate: "climate.mitsubishi_ae_200_geothermal_master_bedroom"
-          avg_temp: "sensor.main_north_hvac_return_air_smoothed"
+          avg_temp: "sensor.main_north_hvac_control_temp"
           fan_stages: 3
           erv: null
           humidifier: "switch.humidifier"
