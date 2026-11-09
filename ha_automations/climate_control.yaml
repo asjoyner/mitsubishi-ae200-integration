@@ -463,6 +463,37 @@ automation:
                 # per-sensor offset against return air, or relocate the FP2s so
                 # the SHT45s read room air (the revised board has landed only in
                 # the master closet so far).
+                # Is the unit, as currently commanded, able to act on the delta
+                # at all? An indoor unit runs when its setpoint is on the
+                # demanding side of the room; parked the other way it is
+                # thermo-off and the fan is the only thing still moving.
+                #
+                # This exists because temp_score below is a pure distance from
+                # target and does not care whether the zone can close that
+                # distance. A zone held in the wrong mode by the dwell or the
+                # mode band therefore got a High or Max fan for doing nothing,
+                # which on heat recovery means blowing warm air at a room that
+                # is already over target. Measured on the Vault 2026-11-09:
+                # heat / setpoint 69 / return air 72 / fan High / temp_score 2.
+                #
+                # Falls back to the current mode and setpoint rather than the
+                # desired ones because those are defined further down; one
+                # 60 s cycle of lag is irrelevant against a house thermal time
+                # constant in hours, and matching what the equipment is doing
+                # right now is the question being asked anyway.
+                zone_acting: >
+                  {% set ctrl = zone_avg_temp | float %}
+                  {% set sp = current_setpoint | float(0) %}
+                  {% if sp <= 0 or not (zone_temp_valid | bool) %}
+                    {{ false }}
+                  {% elif current_mode == 'cool' %}
+                    {{ sp < ctrl - 0.3 }}
+                  {% elif current_mode == 'heat' %}
+                    {{ sp > ctrl + 0.3 }}
+                  {% else %}
+                    {{ true }}
+                  {% endif %}
+
                 temp_score: >
                   {{ (zone_avg_temp | float - target_f | float) | abs }}
 
@@ -470,7 +501,8 @@ automation:
                 temp_fan_level: >
                   {% set score = temp_score | float %}
                   {% set stages = zone_fan_stages | int %}
-                  {% if not (temp_control_on | bool) or not (zone_temp_valid | bool) %}
+                  {% if not (temp_control_on | bool) or not (zone_temp_valid | bool)
+                        or not (zone_acting | bool) %}
                     {{ 0 }}
                   {% elif stages == 4 %}
                     {% if score < 1 %}{{ 0 }}
@@ -522,8 +554,18 @@ automation:
                 # While a flip is held, the setpoint template below still writes
                 # for the direction the room actually needs, which lands on the
                 # wrong side of the held mode -- heat with a setpoint under the
-                # room, or cool with one over it. That thermo-offs the indoor
-                # unit, so a held zone coasts rather than running backwards.
+                # room, or cool with one over it.
+                #
+                # This comment used to claim such a zone merely "coasts". That
+                # was WRONG, and Aaron caught it from the room: the Vault was
+                # pouring out hot air in `heat` with a 69 F setpoint against
+                # 72 F return air. Thermo-off stops the unit's own call, but on
+                # R2 heat recovery the coil still has warm refrigerant in it
+                # whenever other zones are rejecting heat, and this loop was
+                # commanding fan High at the time (see zone_acting below). A
+                # held zone is therefore not harmless; it is only as harmless
+                # as its fan. Holding a mode and running its fan hard are a
+                # contradiction.
                 # The 60 min dwell must not become the failure itself. While a
                 # flip is held the zone coasts, so a load that keeps pushing it
                 # would be ignored for up to an hour -- and at a 72 F target,
