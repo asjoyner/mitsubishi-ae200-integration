@@ -212,9 +212,12 @@ template:
 # faster than the old nominal 15 min window, deliberately, because the fault we
 # just fixed was the loop reacting LATE.
 #
-# dt is measured from this.last_updated rather than assumed to be 60 s, and
-# clamped to 900 s, so a restart or a long HA outage re-acquires in one step
-# instead of crawling back from a stale value.
+# dt comes from each sensor's own `computed_at` attribute rather than from
+# this.last_updated or an assumed 60 s, and is clamped to [0, 900] s. The
+# upper clamp lets a restart or a long HA outage re-acquire in one step
+# instead of crawling back from a stale value; the lower one makes a backwards
+# clock a no-op instead of a negative alpha. See the attribute's own comment
+# for why it is load-bearing.
 #
 # These go unknown whenever the source is not a number, including until the
 # first sample after a restart. That is safe and deliberate: zone_temp_valid
@@ -234,15 +237,32 @@ template:
         state: >
           {% set src = states('sensor.vault_hvac_return_air_temperature') %}
           {% set prev = this.state | float(-999) %}
+          {% set tp = this.attributes.get('computed_at', none) if this is not none else none %}
           {% if not (src | is_number) %}
             unknown
-          {% elif prev < -900 %}
+          {% elif prev < -900 or tp is none %}
             {{ src | float | round(2) }}
           {% else %}
-            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set raw = (now() - (tp | as_datetime)).total_seconds() | float %}
+            {% set dt = [[raw, 900] | min, 0] | max %}
             {% set a = 1 - (e ** (-dt / 600)) %}
             {{ (prev + a * ((src | float) - prev)) | round(2) }}
           {% endif %}
+        attributes:
+          # LOAD-BEARING, not decoration. Two jobs:
+          #  1. It is the EMA's clock. dt is measured from this, not from
+          #     this.last_updated, so the average cannot be skewed by the
+          #     state machine's bookkeeping.
+          #  2. It changes every render, so same_attr is always False and the
+          #     state is always written. Without it a converged sensor stops
+          #     writing, last_updated stops advancing, dt grows to the 900 s
+          #     clamp, and the next source step would be taken at alpha 0.78
+          #     instead of 0.10 -- i.e. a single noise spike would pass almost
+          #     unfiltered, on the zones the smoothing exists for.
+          # It also makes a stalled control input visible at a glance, which is
+          # the failure this whole block replaced.
+          computed_at: "{{ now().isoformat() }}"
+          source: "sensor.vault_hvac_return_air_temperature"
       - name: "Main South HVAC Control Temp"
         unique_id: main_south_hvac_control_temp
         unit_of_measurement: "°F"
@@ -251,15 +271,32 @@ template:
         state: >
           {% set src = states('sensor.main_south_hvac_return_air_temperature') %}
           {% set prev = this.state | float(-999) %}
+          {% set tp = this.attributes.get('computed_at', none) if this is not none else none %}
           {% if not (src | is_number) %}
             unknown
-          {% elif prev < -900 %}
+          {% elif prev < -900 or tp is none %}
             {{ src | float | round(2) }}
           {% else %}
-            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set raw = (now() - (tp | as_datetime)).total_seconds() | float %}
+            {% set dt = [[raw, 900] | min, 0] | max %}
             {% set a = 1 - (e ** (-dt / 600)) %}
             {{ (prev + a * ((src | float) - prev)) | round(2) }}
           {% endif %}
+        attributes:
+          # LOAD-BEARING, not decoration. Two jobs:
+          #  1. It is the EMA's clock. dt is measured from this, not from
+          #     this.last_updated, so the average cannot be skewed by the
+          #     state machine's bookkeeping.
+          #  2. It changes every render, so same_attr is always False and the
+          #     state is always written. Without it a converged sensor stops
+          #     writing, last_updated stops advancing, dt grows to the 900 s
+          #     clamp, and the next source step would be taken at alpha 0.78
+          #     instead of 0.10 -- i.e. a single noise spike would pass almost
+          #     unfiltered, on the zones the smoothing exists for.
+          # It also makes a stalled control input visible at a glance, which is
+          # the failure this whole block replaced.
+          computed_at: "{{ now().isoformat() }}"
+          source: "sensor.main_south_hvac_return_air_temperature"
       - name: "Upstairs HVAC Control Temp"
         unique_id: upstairs_hvac_control_temp
         unit_of_measurement: "°F"
@@ -268,15 +305,32 @@ template:
         state: >
           {% set src = states('sensor.upstairs_hvac_return_air_temperature') %}
           {% set prev = this.state | float(-999) %}
+          {% set tp = this.attributes.get('computed_at', none) if this is not none else none %}
           {% if not (src | is_number) %}
             unknown
-          {% elif prev < -900 %}
+          {% elif prev < -900 or tp is none %}
             {{ src | float | round(2) }}
           {% else %}
-            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set raw = (now() - (tp | as_datetime)).total_seconds() | float %}
+            {% set dt = [[raw, 900] | min, 0] | max %}
             {% set a = 1 - (e ** (-dt / 600)) %}
             {{ (prev + a * ((src | float) - prev)) | round(2) }}
           {% endif %}
+        attributes:
+          # LOAD-BEARING, not decoration. Two jobs:
+          #  1. It is the EMA's clock. dt is measured from this, not from
+          #     this.last_updated, so the average cannot be skewed by the
+          #     state machine's bookkeeping.
+          #  2. It changes every render, so same_attr is always False and the
+          #     state is always written. Without it a converged sensor stops
+          #     writing, last_updated stops advancing, dt grows to the 900 s
+          #     clamp, and the next source step would be taken at alpha 0.78
+          #     instead of 0.10 -- i.e. a single noise spike would pass almost
+          #     unfiltered, on the zones the smoothing exists for.
+          # It also makes a stalled control input visible at a glance, which is
+          # the failure this whole block replaced.
+          computed_at: "{{ now().isoformat() }}"
+          source: "sensor.upstairs_hvac_return_air_temperature"
       - name: "Basement HVAC Control Temp"
         unique_id: basement_hvac_control_temp
         unit_of_measurement: "°F"
@@ -285,15 +339,32 @@ template:
         state: >
           {% set src = states('sensor.basement_hvac_return_air_temperature') %}
           {% set prev = this.state | float(-999) %}
+          {% set tp = this.attributes.get('computed_at', none) if this is not none else none %}
           {% if not (src | is_number) %}
             unknown
-          {% elif prev < -900 %}
+          {% elif prev < -900 or tp is none %}
             {{ src | float | round(2) }}
           {% else %}
-            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set raw = (now() - (tp | as_datetime)).total_seconds() | float %}
+            {% set dt = [[raw, 900] | min, 0] | max %}
             {% set a = 1 - (e ** (-dt / 600)) %}
             {{ (prev + a * ((src | float) - prev)) | round(2) }}
           {% endif %}
+        attributes:
+          # LOAD-BEARING, not decoration. Two jobs:
+          #  1. It is the EMA's clock. dt is measured from this, not from
+          #     this.last_updated, so the average cannot be skewed by the
+          #     state machine's bookkeeping.
+          #  2. It changes every render, so same_attr is always False and the
+          #     state is always written. Without it a converged sensor stops
+          #     writing, last_updated stops advancing, dt grows to the 900 s
+          #     clamp, and the next source step would be taken at alpha 0.78
+          #     instead of 0.10 -- i.e. a single noise spike would pass almost
+          #     unfiltered, on the zones the smoothing exists for.
+          # It also makes a stalled control input visible at a glance, which is
+          # the failure this whole block replaced.
+          computed_at: "{{ now().isoformat() }}"
+          source: "sensor.basement_hvac_return_air_temperature"
       - name: "Main North HVAC Control Temp"
         unique_id: main_north_hvac_control_temp
         unit_of_measurement: "°F"
@@ -302,15 +373,32 @@ template:
         state: >
           {% set src = states('sensor.main_north_hvac_return_air_temperature') %}
           {% set prev = this.state | float(-999) %}
+          {% set tp = this.attributes.get('computed_at', none) if this is not none else none %}
           {% if not (src | is_number) %}
             unknown
-          {% elif prev < -900 %}
+          {% elif prev < -900 or tp is none %}
             {{ src | float | round(2) }}
           {% else %}
-            {% set dt = [(now() - this.last_updated).total_seconds() | float, 900] | min %}
+            {% set raw = (now() - (tp | as_datetime)).total_seconds() | float %}
+            {% set dt = [[raw, 900] | min, 0] | max %}
             {% set a = 1 - (e ** (-dt / 600)) %}
             {{ (prev + a * ((src | float) - prev)) | round(2) }}
           {% endif %}
+        attributes:
+          # LOAD-BEARING, not decoration. Two jobs:
+          #  1. It is the EMA's clock. dt is measured from this, not from
+          #     this.last_updated, so the average cannot be skewed by the
+          #     state machine's bookkeeping.
+          #  2. It changes every render, so same_attr is always False and the
+          #     state is always written. Without it a converged sensor stops
+          #     writing, last_updated stops advancing, dt grows to the 900 s
+          #     clamp, and the next source step would be taken at alpha 0.78
+          #     instead of 0.10 -- i.e. a single noise spike would pass almost
+          #     unfiltered, on the zones the smoothing exists for.
+          # It also makes a stalled control input visible at a glance, which is
+          # the failure this whole block replaced.
+          computed_at: "{{ now().isoformat() }}"
+          source: "sensor.main_north_hvac_return_air_temperature"
 
 input_number:
   hvac_target_temp:
