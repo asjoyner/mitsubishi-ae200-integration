@@ -55,11 +55,24 @@ class AE200Controller:
             raw = await ws_request(self.host, mnet_query(ids), timeout=self.timeout)
             device_attrs = parse_mnet_devices(raw)
             now = datetime.now(timezone.utc).isoformat()
+            updated = 0
             for attrs in device_attrs:
                 gid = attrs.get("Group")
                 if gid and gid in self._devices:
                     self._devices[gid].update(attrs)
                     self._devices[gid].last_successful_poll = now
+                    updated += 1
+            if not updated:
+                # Well-formed XML carrying no Mnet records for any group we
+                # asked about: an error envelope, or a reply to something
+                # else. Nothing raises, so without this the poll reports
+                # success and every device keeps stale or empty attributes.
+                _LOGGER.warning(
+                    "No device records in response from %s (%d bytes)",
+                    self.host, len(raw),
+                )
+                self._mark_all_error("no_device_records")
+                return False
             return True
         except (ConnectionRefusedError, OSError) as err:
             _LOGGER.warning("Connection refused to %s: %s", self.host, err)
