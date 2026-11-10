@@ -917,6 +917,7 @@ automation:
                            and desired_mode != current_mode }}
                   sequence:
                     - action: climate.set_hvac_mode
+                      continue_on_error: true
                       target:
                         entity_id: "{{ zone_climate }}"
                       data:
@@ -933,6 +934,7 @@ automation:
                            and ((desired_setpoint_f | float) - (current_setpoint | float(0))) | abs >= 0.5 }}
                   sequence:
                     - action: climate.set_temperature
+                      continue_on_error: true
                       target:
                         entity_id: "{{ zone_climate }}"
                       data:
@@ -940,13 +942,22 @@ automation:
                 # Temp control OFF: leave setpoints alone for manual control
 
             # --- Send fan speed command if changed ---
+            # fan_modes is checked, not just compared: a unit that came up
+            # without its capability flags reports no fan modes at all, and
+            # calling set_fan_mode on it raises ServiceNotSupported. On
+            # 2026-11-10 that error aborted the run every minute and the
+            # zones after the failing one went unwritten for 37 minutes.
             - choose:
                 - conditions:
                     - condition: template
                       value_template: >
-                        {{ desired_fan != current_fan }}
+                        {% set fan_modes = state_attr(repeat.item.climate, 'fan_modes') %}
+                        {{ desired_fan != current_fan
+                           and fan_modes is not none
+                           and desired_fan in fan_modes }}
                   sequence:
                     - action: climate.set_fan_mode
+                      continue_on_error: true
                       target:
                         entity_id: "{{ zone_climate }}"
                       data:
