@@ -49,6 +49,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         ) from err
     if not devices:
         raise ConfigEntryNotReady(f"AE-200 at {ip_address} reported no groups")
+    # The group list can arrive while the batch poll behind it comes back
+    # empty. Entity capabilities come from that poll, so setting up here
+    # would build climate entities with no fan or swing support.
+    if not any(device.attributes for device in devices):
+        raise ConfigEntryNotReady(
+            f"AE-200 at {ip_address} listed {len(devices)} groups but "
+            "returned no device state"
+        )
 
     hass.data[DOMAIN][entry.entry_id] = {
         "controller": controller,

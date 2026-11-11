@@ -28,6 +28,33 @@ MIN_TEMP = 16
 MAX_TEMP = 30
 MAX_TEMP_WATER_HEATER = 80
 
+# Fan menus by the unit's FanSpeedSW capability flag. A flag we do not know
+# means no fan menu, so FAN_MODE and fan_modes can never disagree.
+FAN_MODE_MAPS = {
+    "4STAGES": {
+        "AUTO": "Auto",
+        "LOW": "Min",
+        "MID2": "Low",
+        "MID1": "High",
+        "HIGH": "Max",
+    },
+    "3STAGES": {
+        "AUTO": "Auto",
+        "MID2": "Low",
+        "MID1": "High",
+        "HIGH": "Max",
+    },
+}
+
+# Every unit has these; FAN_MODE and SWING_MODE depend on the capability
+# flags in the last poll and are added in supported_features.
+BASE_FEATURES = (
+    ClimateEntityFeature.TARGET_TEMPERATURE |
+    ClimateEntityFeature.TARGET_TEMPERATURE_RANGE |
+    ClimateEntityFeature.TURN_ON |
+    ClimateEntityFeature.TURN_OFF
+)
+
 class Mode:
     Heat = "HEAT"
     Heating = "HEATING"
@@ -62,27 +89,6 @@ class AE200Climate(ClimateEntity):
             HVACMode.FAN_ONLY,
             HVACMode.HEAT_COOL,
         ]
-        fan_speed_sw = device.fan_speed_sw
-        if fan_speed_sw == "4STAGES":
-            self._fan_mode_map = {
-                "AUTO": "Auto",
-                "LOW": "Min",
-                "MID2": "Low",
-                "MID1": "High",
-                "HIGH": "Max",
-            }
-        elif fan_speed_sw == "3STAGES":
-            self._fan_mode_map = {
-                "AUTO": "Auto",
-                "MID2": "Low",
-                "MID1": "High",
-                "HIGH": "Max",
-            }
-        else:
-            self._fan_mode_map = {}
-        self._reverse_fan_mode_map = {v: k for k, v in self._fan_mode_map.items()}
-        self._attr_fan_modes = list(self._fan_mode_map.values())
-
         self._swing_mode_map = {
             "AUTO": "Auto",
             "SWING": "Swing",
@@ -98,17 +104,6 @@ class AE200Climate(ClimateEntity):
         self._model_code = device.model
         self._is_water_heater = device.is_water_heater
 
-        features = (
-            ClimateEntityFeature.TARGET_TEMPERATURE |
-            ClimateEntityFeature.TARGET_TEMPERATURE_RANGE |
-            ClimateEntityFeature.TURN_ON |
-            ClimateEntityFeature.TURN_OFF
-        )
-        if fan_speed_sw != "NONE":
-            features |= ClimateEntityFeature.FAN_MODE
-        if device.swing_sw == "ENABLE":
-            features |= ClimateEntityFeature.SWING_MODE
-        self._attr_supported_features = features
         self._attr_temperature_unit = UnitOfTemperature.CELSIUS
         self._current_temperature = None
         self._target_temperature = None
@@ -133,8 +128,32 @@ class AE200Climate(ClimateEntity):
         return attrs
 
     @property
+    def _fan_mode_map(self) -> dict[str, str]:
+        """Device fan speed -> HA fan mode, per the last poll's capabilities."""
+        return FAN_MODE_MAPS.get(self._device.fan_speed_sw, {})
+
+    @property
+    def _reverse_fan_mode_map(self) -> dict[str, str]:
+        return {v: k for k, v in self._fan_mode_map.items()}
+
+    @property
+    def fan_modes(self):
+        return list(self._fan_mode_map.values()) or None
+
+    @property
     def supported_features(self):
-        return self._attr_supported_features
+        """Features from the capability flags in the latest poll.
+
+        Derived on every read, not frozen in __init__: the capability flags
+        arrive with the first successful poll, and if that poll returned
+        nothing the flags would otherwise stay wrong until HA restarts.
+        """
+        features = BASE_FEATURES
+        if self._fan_mode_map:
+            features |= ClimateEntityFeature.FAN_MODE
+        if self._device.swing_sw == "ENABLE":
+            features |= ClimateEntityFeature.SWING_MODE
+        return features
 
     @property
     def should_poll(self):
@@ -209,8 +228,9 @@ class AE200Climate(ClimateEntity):
             return self._fan_mode_map[self._fan_mode]
         # Return first valid fan mode as fallback; HA rejects None when
         # FAN_MODE feature is supported.
-        if self._attr_fan_modes:
-            return self._attr_fan_modes[0]
+        fan_modes = self.fan_modes
+        if fan_modes:
+            return fan_modes[0]
         return None
 
     @property
