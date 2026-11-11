@@ -339,14 +339,21 @@ class AE200Climate(ClimateEntity):
         self._swing_mode = self._device.air_direction
 
         if self._device.drive == "ON":
-            # Target temperature: SetTemp is primary, fall back to mode-specific
-            temp = self._device.set_temp
+            # Target temperature: read back the slot the unit actually runs
+            # on, the same one async_set_temperature writes for this mode.
+            # SetTemp is only the fallback: it accepts and echoes a write
+            # that the unit does not control on, so preferring it reports a
+            # setpoint the equipment is not keeping and hides a stale slot.
+            mode = self._device.mode
+            if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
+                temp = self._device.set_temp2
+            elif mode in (Mode.Cool, Mode.Cooling, Mode.Dry,
+                          Mode.Drying, Mode.AutoCool):
+                temp = self._device.set_temp1
+            else:
+                temp = None
             if temp is None:
-                mode = self._device.mode
-                if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
-                    temp = self._device.set_temp2
-                else:
-                    temp = self._device.set_temp1
+                temp = self._device.set_temp
             self._target_temperature = temp
             self._target_temperature_high = self._device.set_temp1
             self._target_temperature_low = self._device.set_temp2
