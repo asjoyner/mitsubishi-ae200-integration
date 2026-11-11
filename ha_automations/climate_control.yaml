@@ -415,6 +415,55 @@ input_number:
     # the last setting rather than coming up at `min:` (65), which is the
     # failure direction a YAML input_number takes with nothing stored.
 
+  # The setpoint this loop decided on for each zone, written every cycle
+  # whether or not it had to be sent. Without it the only setpoint in
+  # Prometheus is the one read back from the equipment, so "did the unit
+  # accept what we commanded" cannot be asked -- which is how UPSTAIRS held
+  # 74.3 F against a commanded 69 F for weeks while every series agreed.
+  #
+  # Comparing the read-back against the house target instead cannot be made
+  # tight: this loop deliberately writes target +/-1 F, the AE-200 stores
+  # 0.5 C steps, and its 2.0 C minimum split between SetTemp1 and SetTemp2
+  # can pull the active slot one further step, so 2.0 F of disagreement is
+  # legitimate. Against this value the tolerance is just the storage step.
+  #
+  # No `initial:`, for the same reason as hvac_target_temp above.
+  vault_hvac_desired_setpoint:
+    name: "Vault HVAC Desired Setpoint"
+    min: 61
+    max: 86
+    step: 0.5
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+  main_south_hvac_desired_setpoint:
+    name: "Main Level Left HVAC Desired Setpoint"
+    min: 61
+    max: 86
+    step: 0.5
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+  upstairs_hvac_desired_setpoint:
+    name: "Upstairs HVAC Desired Setpoint"
+    min: 61
+    max: 86
+    step: 0.5
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+  basement_hvac_desired_setpoint:
+    name: "Downstairs HVAC Desired Setpoint"
+    min: 61
+    max: 86
+    step: 0.5
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+  main_north_hvac_desired_setpoint:
+    name: "Master Bedroom HVAC Desired Setpoint"
+    min: 61
+    max: 86
+    step: 0.5
+    unit_of_measurement: "°F"
+    icon: mdi:thermometer-chevron-up
+
 input_boolean:
   # No `initial:` on either of these, so they restore their last state across a
   # restart. They used to be pinned (climate_control false, temp_control true),
@@ -450,6 +499,7 @@ automation:
         - name: "Vault"
           label: "hvac-vault"
           climate: "climate.mitsubishi_ae_200_geothermal_vault"
+          slug: "vault"
           avg_temp: "sensor.vault_hvac_control_temp"
           fan_stages: 4
           erv: null
@@ -460,6 +510,7 @@ automation:
         - name: "Main Level Left"
           label: "hvac-main-south"
           climate: "climate.mitsubishi_ae_200_geothermal_main_level_left"
+          slug: "main_south"
           avg_temp: "sensor.main_south_hvac_control_temp"
           fan_stages: 4
           erv: "switch.erv_main"
@@ -470,6 +521,7 @@ automation:
         - name: "Upstairs"
           label: "hvac-upstairs"
           climate: "climate.mitsubishi_ae_200_geothermal_upstairs"
+          slug: "upstairs"
           avg_temp: "sensor.upstairs_hvac_control_temp"
           fan_stages: 4
           erv: "switch.erv_upstairs"
@@ -480,6 +532,7 @@ automation:
         - name: "Downstairs"
           label: "hvac-basement"
           climate: "climate.mitsubishi_ae_200_geothermal_downstairs"
+          slug: "basement"
           avg_temp: "sensor.basement_hvac_control_temp"
           fan_stages: 4
           erv: null
@@ -490,6 +543,7 @@ automation:
         - name: "Master Bedroom"
           label: "hvac-main-north"
           climate: "climate.mitsubishi_ae_200_geothermal_master_bedroom"
+          slug: "main_north"
           avg_temp: "sensor.main_north_hvac_control_temp"
           fan_stages: 3
           erv: null
@@ -922,6 +976,28 @@ automation:
                         entity_id: "{{ zone_climate }}"
                       data:
                         hvac_mode: "{{ desired_mode }}"
+
+            # --- Publish the commanded setpoint for monitoring ---
+            # Written every cycle, including inside the dead band where no
+            # command is sent, so the series says what we want the zone to
+            # hold rather than what we last had to write. Skipped when temp
+            # control is off, where desired_setpoint_f is the 0 sentinel and
+            # out of the helper's range; gate any rule on
+            # input_boolean.hvac_temp_control.
+            - choose:
+                - conditions:
+                    - condition: template
+                      value_template: >
+                        {{ (temp_control_on | bool) and (zone_temp_valid | bool)
+                           and desired_setpoint_f | float(0) > 0 }}
+                  sequence:
+                    - action: input_number.set_value
+                      continue_on_error: true
+                      target:
+                        entity_id: >
+                          input_number.{{ repeat.item.slug }}_hvac_desired_setpoint
+                      data:
+                        value: "{{ desired_setpoint_f | float | round(1) }}"
 
             # --- Send setpoint command ---
             - choose:
