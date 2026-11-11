@@ -278,11 +278,11 @@ class AE200Climate(ClimateEntity):
         if temperature is not None:
             temperature = _round_temp(temperature)
             params = {"SetTemp": str(temperature)}
-            mode = self._device.mode
-            if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
-                params["SetTemp2"] = str(temperature)
-            elif mode in (Mode.Cool, Mode.Cooling, Mode.Dry, Mode.Drying, Mode.AutoCool):
-                params["SetTemp1"] = str(temperature)
+            # Same slot the read-back uses, so a write and the value we then
+            # report can never come from different registers.
+            slot = self._device.set_temp_slot
+            if slot:
+                params[slot] = str(temperature)
             await self._controller.send_command(self._device.group_id, params)
             self._target_temperature = temperature
             self.async_write_ha_state()
@@ -339,22 +339,9 @@ class AE200Climate(ClimateEntity):
         self._swing_mode = self._device.air_direction
 
         if self._device.drive == "ON":
-            # Target temperature: read back the slot the unit actually runs
-            # on, the same one async_set_temperature writes for this mode.
-            # SetTemp is only the fallback: it accepts and echoes a write
-            # that the unit does not control on, so preferring it reports a
-            # setpoint the equipment is not keeping and hides a stale slot.
-            mode = self._device.mode
-            if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
-                temp = self._device.set_temp2
-            elif mode in (Mode.Cool, Mode.Cooling, Mode.Dry,
-                          Mode.Drying, Mode.AutoCool):
-                temp = self._device.set_temp1
-            else:
-                temp = None
-            if temp is None:
-                temp = self._device.set_temp
-            self._target_temperature = temp
+            # Read back the slot the unit actually runs on, the same one
+            # async_set_temperature writes for this mode.
+            self._target_temperature = self._device.effective_set_temp
             self._target_temperature_high = self._device.set_temp1
             self._target_temperature_low = self._device.set_temp2
 

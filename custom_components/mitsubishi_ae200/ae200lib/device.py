@@ -4,6 +4,14 @@ from dataclasses import dataclass, field
 import time
 
 
+# Which setpoint slot the unit controls on, by the mode it reports. The
+# AE-200 keeps SetTemp1 for cooling and SetTemp2 for heating and honours the
+# one matching the current mode; SetTemp accepts and echoes a write without
+# necessarily being the value the unit keeps.
+HEAT_MODES = ("HEAT", "HEATING", "AUTOHEAT")
+COOL_MODES = ("COOL", "COOLING", "DRY", "DRYING", "AUTOCOOL")
+
+
 @dataclass
 class DeviceState:
     """Represents the current state of a single HVAC/water heater unit."""
@@ -55,6 +63,31 @@ class DeviceState:
     @property
     def set_temp2(self) -> float | None:
         return self._float("SetTemp2")
+
+    @property
+    def set_temp_slot(self) -> str | None:
+        """Attribute holding the setpoint for the current mode, if any.
+
+        Read and write must agree on this, or a write lands in one register
+        while the read-back comes from another.
+        """
+        mode = self.mode
+        if mode in HEAT_MODES:
+            return "SetTemp2"
+        if mode in COOL_MODES:
+            return "SetTemp1"
+        return None
+
+    @property
+    def effective_set_temp(self) -> float | None:
+        """The setpoint the unit is actually controlling on.
+
+        SetTemp is only the fallback, for modes with no slot of their own and
+        for units (water heaters) that expose no slots at all.
+        """
+        slot = self.set_temp_slot
+        temp = self._float(slot) if slot else None
+        return temp if temp is not None else self.set_temp
 
     @property
     def inlet_temp(self) -> float | None:
