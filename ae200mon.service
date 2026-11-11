@@ -1,3 +1,7 @@
+# NOT the installed copy. The deploy tool owns the unit it installs:
+# ae200monUnit in deploy/services_alfred.go, and `sudo deploy ae200mon`
+# rewrites /etc/systemd/system/ae200mon.service from there. Editing this
+# file changes nothing on the box; keep it in step with that const.
 [Unit]
 Description=AE-200 Monitoring Daemon
 After=network-online.target
