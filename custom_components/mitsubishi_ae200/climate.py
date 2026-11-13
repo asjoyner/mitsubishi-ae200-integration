@@ -125,6 +125,12 @@ class AE200Climate(ClimateEntity):
             attrs["last_error_reason"] = self._device.last_error
         if self._device.last_successful_poll is not None:
             attrs["last_successful_poll"] = self._device.last_successful_poll
+        # current_temperature is rounded to the display precision, which is
+        # whole degrees in a Fahrenheit install. Expose the controller's
+        # native reading so automations can compare against fractional
+        # thresholds without that quantisation.
+        if self._device.inlet_temp is not None:
+            attrs["inlet_temperature_celsius"] = self._device.inlet_temp
         return attrs
 
     @property
