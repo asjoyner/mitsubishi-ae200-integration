@@ -131,6 +131,13 @@ class AE200Climate(ClimateEntity):
         # thresholds without that quantisation.
         if self._device.inlet_temp is not None:
             attrs["inlet_temperature_celsius"] = self._device.inlet_temp
+        # The per-mode setpoint slots. Outside auto the unit obeys SetTemp1 in
+        # cool and dry and SetTemp2 in heat, which can differ from SetTemp
+        # (shown as the target temperature).
+        if self._device.set_temp1 is not None:
+            attrs["cool_setpoint_celsius"] = self._device.set_temp1
+        if self._device.set_temp2 is not None:
+            attrs["heat_setpoint_celsius"] = self._device.set_temp2
         return attrs
 
     @property
@@ -285,10 +292,17 @@ class AE200Climate(ClimateEntity):
             temperature = _round_temp(temperature)
             params = {"SetTemp": str(temperature)}
             mode = self._device.mode
-            if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
+            if mode == Mode.AutoHeat:
                 params["SetTemp2"] = str(temperature)
-            elif mode in (Mode.Cool, Mode.Cooling, Mode.Dry, Mode.Drying, Mode.AutoCool):
+            elif mode == Mode.AutoCool:
                 params["SetTemp1"] = str(temperature)
+            elif mode not in (Mode.Auto,):
+                # Outside auto the unit obeys the slot for its current mode:
+                # SetTemp1 in cool and dry, SetTemp2 in heat. Write both, so
+                # that a later mode change cannot leave the unit holding a
+                # stale value in the other slot.
+                params["SetTemp1"] = str(temperature)
+                params["SetTemp2"] = str(temperature)
             await self._controller.send_command(self._device.group_id, params)
             self._target_temperature = temperature
             self.async_write_ha_state()
