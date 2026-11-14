@@ -292,17 +292,18 @@ class AE200Climate(ClimateEntity):
             temperature = _round_temp(temperature)
             params = {"SetTemp": str(temperature)}
             mode = self._device.mode
-            if mode == Mode.AutoHeat:
+            # Write only the slot the unit obeys in its current mode: SetTemp2
+            # in heat, SetTemp1 in cool and dry. The controller keeps a
+            # minimum gap between the two (SetTemp1 above SetTemp2), so
+            # writing both to the same value makes it move one of them; in
+            # cool it raises SetTemp1 by 1.5 C, which is the slot the unit
+            # then obeys. The other slot can be stale after a mode change;
+            # cool_setpoint_celsius and heat_setpoint_celsius expose both so
+            # an automation can detect that and write again.
+            if mode in (Mode.Heat, Mode.Heating, Mode.AutoHeat):
                 params["SetTemp2"] = str(temperature)
-            elif mode == Mode.AutoCool:
+            elif mode in (Mode.Cool, Mode.Cooling, Mode.Dry, Mode.Drying, Mode.AutoCool):
                 params["SetTemp1"] = str(temperature)
-            elif mode not in (Mode.Auto,):
-                # Outside auto the unit obeys the slot for its current mode:
-                # SetTemp1 in cool and dry, SetTemp2 in heat. Write both, so
-                # that a later mode change cannot leave the unit holding a
-                # stale value in the other slot.
-                params["SetTemp1"] = str(temperature)
-                params["SetTemp2"] = str(temperature)
             await self._controller.send_command(self._device.group_id, params)
             self._target_temperature = temperature
             self.async_write_ha_state()
